@@ -1,4 +1,4 @@
-// logs.js - 日志查看页面脚本
+const extensionApi = globalThis.browser ?? globalThis.chrome;
 
 // 格式化时间
 function formatTime(isoString) {
@@ -27,52 +27,80 @@ function formatTime(isoString) {
     });
 }
 
+function createEmptyState(icon, text) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'empty-state';
+
+    const iconEl = document.createElement('div');
+    iconEl.className = 'empty-state-icon';
+    iconEl.textContent = icon;
+
+    const textEl = document.createElement('div');
+    textEl.textContent = text;
+
+    wrapper.appendChild(iconEl);
+    wrapper.appendChild(textEl);
+
+    return wrapper;
+}
+
 // 渲染日志
 function renderLogs(logs) {
     const container = document.getElementById('logsContainer');
+    container.replaceChildren();
 
     if (!logs || logs.length === 0) {
-        container.innerHTML = `
-            <div class="empty-state">
-                <div class="empty-state-icon">📝</div>
-                <div>暂无日志记录</div>
-            </div>
-        `;
+        container.appendChild(createEmptyState('📝', '暂无日志记录'));
         return;
     }
 
-    container.innerHTML = logs.map(log => {
-        const detailsHtml = log.details
-            ? `<div class="log-details">${JSON.stringify(log.details, null, 2)}</div>`
-            : '';
+    logs.forEach((log) => {
+        const entry = document.createElement('div');
+        entry.className = `log-entry ${log.level}`;
 
-        return `
-            <div class="log-entry ${log.level}">
-                <div class="log-header">
-                    <span class="log-level ${log.level}">${log.level}</span>
-                    <span class="log-time">${formatTime(log.timestamp)}</span>
-                </div>
-                <div class="log-message">${log.message}</div>
-                ${detailsHtml}
-            </div>
-        `;
-    }).join('');
+        const header = document.createElement('div');
+        header.className = 'log-header';
+
+        const level = document.createElement('span');
+        level.className = `log-level ${log.level}`;
+        level.textContent = log.level;
+
+        const time = document.createElement('span');
+        time.className = 'log-time';
+        time.textContent = formatTime(log.timestamp);
+
+        header.appendChild(level);
+        header.appendChild(time);
+
+        const message = document.createElement('div');
+        message.className = 'log-message';
+        message.textContent = log.message;
+
+        entry.appendChild(header);
+        entry.appendChild(message);
+
+        if (log.details) {
+            const details = document.createElement('div');
+            details.className = 'log-details';
+            details.textContent = JSON.stringify(log.details, null, 2);
+            entry.appendChild(details);
+        }
+
+        container.appendChild(entry);
+    });
 }
 
 // 加载日志
 async function loadLogs() {
-    chrome.runtime.sendMessage({ action: 'getLogs' }, (response) => {
-        if (response && response.success) {
-            renderLogs(response.logs);
-        } else {
-            document.getElementById('logsContainer').innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-state-icon">❌</div>
-                    <div>加载日志失败</div>
-                </div>
-            `;
-        }
-    });
+    const response = await extensionApi.runtime.sendMessage({ action: 'getLogs' });
+
+    if (response && response.success) {
+        renderLogs(response.logs);
+        return;
+    }
+
+    const container = document.getElementById('logsContainer');
+    container.replaceChildren(createEmptyState('❌', '加载日志失败'));
 }
 
 // 清空日志
@@ -81,11 +109,10 @@ async function clearLogs() {
         return;
     }
 
-    chrome.runtime.sendMessage({ action: 'clearLogs' }, (response) => {
-        if (response && response.success) {
-            loadLogs();
-        }
-    });
+    const response = await extensionApi.runtime.sendMessage({ action: 'clearLogs' });
+    if (response && response.success) {
+        loadLogs();
+    }
 }
 
 // 初始化

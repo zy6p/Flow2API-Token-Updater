@@ -2,7 +2,8 @@
   "manifest_version": 3,
   "name": "Flow2API Token Updater",
   "version": "1.0.0",
-  "description": "自动提取Google Labs cookie并更新到Flow2API系统",
+  "description": "自动提取 Google Labs cookie 并更新到 Flow2API，支持 Chrome/Edge/Firefox/Zen",
+  "minimum_chrome_version": "121",
   "permissions": [
     "cookies",
     "alarms",
@@ -15,6 +16,9 @@
     "https://labs.google/*"
   ],
   "background": {
+    "scripts": [
+      "background.js"
+    ],
     "service_worker": "background.js"
   },
   "action": {
@@ -29,5 +33,15 @@
     "16": "icon16.png",
     "48": "icon48.png",
     "128": "icon128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "flow2api-token-updater@flow2api.local",
+      "data_collection_permissions": {
+        "required": [
+          "authenticationInfo"
+        ]
+      }
+    }
   }
 }

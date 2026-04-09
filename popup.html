@@ -32,17 +32,36 @@
             color: #555;
         }
         input[type="text"],
-        input[type="number"] {
+        input[type="number"],
+        select {
             width: 100%;
             padding: 8px 12px;
             border: 1px solid #ddd;
             border-radius: 4px;
             font-size: 14px;
+            background: white;
         }
         input[type="text"]:focus,
-        input[type="number"]:focus {
+        input[type="number"]:focus,
+        select:focus {
             outline: none;
             border-color: #1a73e8;
+        }
+        .row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .row > * {
+            min-width: 0;
+        }
+        .row-grow {
+            flex: 1;
+        }
+        .mini-btn {
+            flex: none;
+            padding: 8px 10px;
+            font-size: 13px;
         }
         .hint {
             font-size: 12px;
@@ -84,6 +103,7 @@
             border-radius: 4px;
             font-size: 13px;
             display: none;
+            white-space: pre-line;
         }
         .status.success {
             background-color: #e6f4ea;
@@ -115,10 +135,28 @@
         .info-section strong {
             color: #333;
         }
+        .hidden {
+            display: none;
+        }
     </style>
 </head>
 <body>
     <h1>🔄 Flow2API Token Updater</h1>
+
+    <div class="form-group">
+        <label for="accountSelect">账号配置</label>
+        <div class="row">
+            <select id="accountSelect" class="row-grow"></select>
+            <button class="btn-secondary mini-btn" id="addAccountBtn" type="button">新增</button>
+            <button class="btn-secondary mini-btn" id="removeAccountBtn" type="button">删除</button>
+        </div>
+        <div class="hint">一个浏览器 profile 内可配置多套用户，多账号会在定时任务里依次同步</div>
+    </div>
+
+    <div class="form-group">
+        <label for="accountName">账号名称</label>
+        <input type="text" id="accountName" placeholder="例如：Zen 工作区 A / 主账号">
+    </div>
 
     <div class="form-group">
         <label for="apiUrl">连接接口</label>
@@ -133,14 +171,30 @@
     </div>
 
     <div class="form-group">
+        <label for="syncSource">会话来源</label>
+        <select id="syncSource">
+            <option value="default">默认会话 / 当前浏览器 profile</option>
+            <option value="activeTab">跟随当前活动标签</option>
+            <option value="store">固定到指定 cookie store</option>
+        </select>
+        <div class="hint">单账号可直接跟随当前标签；如果你要长期定时同步多账号，优先固定到具体 cookie store</div>
+    </div>
+
+    <div class="form-group hidden" id="cookieStoreGroup">
+        <label for="cookieStoreId">固定 cookie store</label>
+        <select id="cookieStoreId"></select>
+        <div class="hint">在目标工作区 / 容器页打开插件后保存，可以把当前账号绑定到对应会话</div>
+    </div>
+
+    <div class="form-group">
         <label for="refreshInterval">刷新间隔（分钟）</label>
         <input type="number" id="refreshInterval" value="60" min="1" max="1440">
-        <div class="hint">建议设置为60分钟（1小时）</div>
+        <div class="hint">所有账号共用一个定时刷新间隔，建议 60-360 分钟</div>
     </div>
 
     <div class="button-group">
         <button class="btn-primary" id="saveBtn">保存配置</button>
-        <button class="btn-secondary" id="testBtn">立即测试</button>
+        <button class="btn-secondary" id="testBtn">测试当前账号</button>
     </div>
 
     <div class="button-group">
@@ -152,11 +206,13 @@
     <div class="divider"></div>
 
     <div class="info-section">
-        <strong>📌 使用说明：</strong><br>
-        1. 在Flow2API管理后台获取连接接口和Token<br>
-        2. 填写配置并保存<br>
-        3. 插件将自动定时提取Google Labs的cookie<br>
-        4. 提取的cookie会自动更新到Flow2API系统
+        <strong>📌 当前环境：</strong><br>
+        <span id="environmentHint">正在检测浏览器和可用会话...</span><br><br>
+        <strong>📎 说明：</strong><br>
+        <span id="profileHint">
+            浏览器 profile 彼此完全隔离。若你有多个 Zen / Firefox profile，需要在每个 profile 里各装一份扩展；
+            同一个 profile 里的多账号，可以通过工作区 / 容器 / cookie store 区分。
+        </span>
     </div>
 
     <script src="popup.js"></script>
