@@ -1,0 +1,4 @@
+.cloudflare-pages/
+dist/
+.wrangler/
+web-ext-artifacts/
