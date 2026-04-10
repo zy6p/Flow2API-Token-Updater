@@ -159,7 +159,7 @@
             <div class="eyebrow">Flow2API Token Updater</div>
             <h1>Firefox / Zen / Chrome / Edge 安装入口</h1>
             <p class="sub">
-                这个页面提供扩展下载、安装说明和隐私政策。Firefox / Zen 用户优先使用 XPI；
+                这个页面提供扩展下载、安装说明和隐私政策。Firefox / Zen 正式版浏览器请优先使用“临时加载包”；
                 Chromium 用户使用 ZIP 后在 <code>chrome://extensions</code> 中加载已解压扩展。
             </p>
         </section>
@@ -167,13 +167,15 @@
         <section class="grid">
             <article class="card">
                 <h2>下载</h2>
-                <p class="ok">当前页面已包含可直接分发的安装包。</p>
+                <p class="ok">Firefox / Zen 当前建议使用临时加载包，避免未签名 XPI 被判定为损坏。</p>
                 <div class="actions">
-                    <a class="btn btn-primary" href="/downloads/latest-firefox.xpi">下载 Firefox / Zen XPI</a>
+                    <a class="btn btn-primary" href="/downloads/latest-gecko-temporary.zip">下载 Firefox / Zen 临时加载包</a>
                     <a class="btn btn-secondary" href="/downloads/latest-chromium.zip">下载 Chromium ZIP</a>
                 </div>
                 <p class="meta">
                     备用文件：
+                    <a href="/downloads/latest-firefox.xpi">未签名 Firefox XPI</a>
+                    /
                     <a href="/downloads/latest-firefox.zip">Firefox ZIP</a>
                 </p>
                 <a class="privacy-link" href="/privacy.html">查看隐私政策</a>
@@ -182,8 +184,9 @@
             <article class="card">
                 <h2>安装说明</h2>
                 <ul>
-                    <li>Firefox / Zen：优先尝试直接安装 <code>.xpi</code>。</li>
-                    <li>如果 Firefox / Zen 拒绝未签名扩展：打开 <code>about:debugging#/runtime/this-firefox</code>，临时加载 <code>manifest.json</code>。</li>
+                    <li>Firefox / Zen：下载“临时加载包”并解压。</li>
+                    <li>打开 <code>about:debugging#/runtime/this-firefox</code>，点击 <code>Load Temporary Add-on</code>，选择解压目录中的 <code>manifest.json</code>。</li>
+                    <li>未签名的 <code>.xpi</code> 在 Firefox / Zen 正式版中通常会被显示为“附加组件似乎已损坏”。</li>
                     <li>Chrome / Edge：下载 ZIP 后解压，在扩展页面开启开发者模式并加载已解压扩展。</li>
                 </ul>
             </article>
