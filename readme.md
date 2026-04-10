@@ -39,7 +39,18 @@
 
 3.  **注意事项**
     这是开发态安装方式，浏览器重启后需要重新加载一次。
+    未签名的 `.xpi` 在 Firefox / Zen 的 `about:addons` 正式安装路径里通常会显示“附加组件似乎已损坏”，这不是代码损坏，而是签名校验未通过。
     如果要做长期安装，需要签名后的 XPI 包，或使用允许未签名扩展的开发版环境。
+
+4.  **命令行启动开发态临时扩展**
+    如果不想每次手动点 `about:debugging`，可以直接运行：
+    `./scripts/run_gecko_dev.sh`
+
+    如果你的 Zen 可执行文件不叫 `firefox`，可以显式指定：
+    `GECKO_BINARY=/path/to/zen-browser ./scripts/run_gecko_dev.sh`
+
+    如果你要在某个固定 profile 里启动：
+    `GECKO_BINARY=/path/to/zen-browser GECKO_PROFILE=/path/to/profile ./scripts/run_gecko_dev.sh`
 
 ## 二、 配置指南
 
