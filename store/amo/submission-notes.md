@@ -32,3 +32,11 @@ export AMO_API_KEY='your-amo-jwt-issuer'
 export AMO_API_SECRET='your-amo-jwt-secret'
 ./scripts/sign_amo_listed.sh
 ```
+
+Submit an unlisted AMO signing request for self-distribution:
+
+```bash
+export AMO_API_KEY='your-amo-jwt-issuer'
+export AMO_API_SECRET='your-amo-jwt-secret'
+./scripts/sign_amo_unlisted.sh
+```
