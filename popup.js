@@ -148,17 +148,26 @@ function renderCookieStoreOptions(selectedStoreId = '') {
     const storeOptions = state.storeOptions.filter((option) => (
         option.value !== 'default' && option.value !== 'activeTab'
     ));
+    const normalizedOptions = [...storeOptions];
+
+    if (selectedStoreId && !normalizedOptions.some((option) => option.value === selectedStoreId)) {
+        normalizedOptions.unshift({
+            value: selectedStoreId,
+            label: describeCookieStoreId(selectedStoreId),
+            description: '已保存的 cookie store，当前未检测到活动标签'
+        });
+    }
 
     select.innerHTML = '';
 
     const placeholder = document.createElement('option');
     placeholder.value = '';
-    placeholder.textContent = storeOptions.length
+    placeholder.textContent = normalizedOptions.length
         ? '请选择要绑定的 cookie store'
         : '当前未检测到可固定绑定的 cookie store';
     select.appendChild(placeholder);
 
-    storeOptions.forEach((option) => {
+    normalizedOptions.forEach((option) => {
         const element = document.createElement('option');
         element.value = option.value;
         element.textContent = option.description
@@ -168,6 +177,30 @@ function renderCookieStoreOptions(selectedStoreId = '') {
     });
 
     select.value = selectedStoreId || '';
+}
+
+function describeCookieStoreId(storeId) {
+    if (!storeId) {
+        return '默认会话';
+    }
+
+    if (storeId === 'firefox-default') {
+        return '默认会话 / 无容器';
+    }
+
+    if (storeId.startsWith('firefox-container-')) {
+        return `Firefox / Zen 容器 ${storeId.replace('firefox-container-', '')}`;
+    }
+
+    if (storeId === '0') {
+        return '主浏览器会话';
+    }
+
+    if (storeId === '1') {
+        return '隐私窗口会话';
+    }
+
+    return `Cookie Store ${storeId}`;
 }
 
 function renderEnvironmentHint() {

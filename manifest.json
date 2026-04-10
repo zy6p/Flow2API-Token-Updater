@@ -3,7 +3,6 @@
   "name": "Flow2API Token Updater",
   "version": "1.0.0",
   "description": "自动提取 Google Labs cookie 并更新到 Flow2API，支持 Chrome/Edge/Firefox/Zen",
-  "minimum_chrome_version": "121",
   "permissions": [
     "cookies",
     "alarms",
