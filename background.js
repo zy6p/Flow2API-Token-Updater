@@ -5,6 +5,7 @@ const LABS_URL = 'https://labs.google/fx/vi/tools/flow';
 const SESSION_COOKIE_NAME = '__Secure-next-auth.session-token';
 const DEFAULT_REFRESH_INTERVAL = 60;
 const SESSION_WAIT_MS = 5000;
+const ACCOUNT_SECRETS_KEY = 'accountSecrets';
 
 const Logger = {
     async log(level, message, details = null) {
@@ -126,8 +127,10 @@ async function getSetupData() {
 
 async function saveSettings(settings) {
     const normalizedSettings = validateAndNormalizeSettings(settings);
+    const { syncSettings, localSettings } = splitSettingsForStorage(normalizedSettings);
 
-    await extensionApi.storage.sync.set(normalizedSettings);
+    await extensionApi.storage.sync.set(syncSettings);
+    await extensionApi.storage.local.set(localSettings);
     await extensionApi.storage.sync.remove(['apiUrl', 'connectionToken']);
 
     await setupAlarm();
@@ -270,23 +273,30 @@ async function setupAlarm() {
 }
 
 async function loadSettings() {
-    const stored = await extensionApi.storage.sync.get([
-        'accounts',
-        'refreshInterval',
-        'apiUrl',
-        'connectionToken'
+    const [syncStored, localStored] = await Promise.all([
+        extensionApi.storage.sync.get([
+            'accounts',
+            'refreshInterval',
+            'apiUrl',
+            'connectionToken'
+        ]),
+        extensionApi.storage.local.get([ACCOUNT_SECRETS_KEY])
     ]);
+    const localSecrets = normalizeSecretsMap(localStored[ACCOUNT_SECRETS_KEY]);
 
-    let accounts = Array.isArray(stored.accounts)
-        ? stored.accounts.map((account, index) => normalizeAccount(account, index))
+    let accounts = Array.isArray(syncStored.accounts)
+        ? syncStored.accounts.map((account, index) => normalizeAccount({
+            ...account,
+            connectionToken: resolveAccountSecret(account, localSecrets)
+        }, index))
         : [];
 
-    if (!accounts.length && (stored.apiUrl || stored.connectionToken)) {
+    if (!accounts.length && (syncStored.apiUrl || syncStored.connectionToken)) {
         accounts = [
             normalizeAccount({
                 name: '默认账号',
-                apiUrl: stored.apiUrl || '',
-                connectionToken: stored.connectionToken || '',
+                apiUrl: syncStored.apiUrl || '',
+                connectionToken: syncStored.connectionToken || '',
                 syncSource: 'default',
                 cookieStoreId: ''
             }, 0)
@@ -299,28 +309,67 @@ async function loadSettings() {
 
     return {
         accounts,
-        refreshInterval: normalizeRefreshInterval(stored.refreshInterval)
+        refreshInterval: normalizeRefreshInterval(syncStored.refreshInterval)
     };
 }
 
 async function migrateLegacyConfig() {
-    const stored = await extensionApi.storage.sync.get(['accounts', 'apiUrl', 'connectionToken']);
+    const [syncStored, localStored] = await Promise.all([
+        extensionApi.storage.sync.get(['accounts', 'refreshInterval', 'apiUrl', 'connectionToken']),
+        extensionApi.storage.local.get([ACCOUNT_SECRETS_KEY])
+    ]);
+    const existingSecrets = normalizeSecretsMap(localStored[ACCOUNT_SECRETS_KEY]);
 
-    if (Array.isArray(stored.accounts) || (!stored.apiUrl && !stored.connectionToken)) {
+    if (Array.isArray(syncStored.accounts) && syncStored.accounts.length) {
+        const normalizedAccounts = syncStored.accounts.map((account, index) => normalizeAccount({
+            ...account,
+            connectionToken: resolveAccountSecret(account, existingSecrets)
+        }, index));
+        const needsSanitizedAccounts = syncStored.accounts.some((account) => (
+            Object.prototype.hasOwnProperty.call(account, 'connectionToken')
+        ));
+        const needsSecretMigration = normalizedAccounts.some((account) => (
+            account.connectionToken &&
+            existingSecrets[account.id] !== account.connectionToken
+        ));
+
+        if (!needsSanitizedAccounts && !needsSecretMigration && !syncStored.apiUrl && !syncStored.connectionToken) {
+            return false;
+        }
+
+        const { syncSettings, localSettings } = splitSettingsForStorage({
+            accounts: normalizedAccounts,
+            refreshInterval: normalizeRefreshInterval(syncStored.refreshInterval)
+        });
+
+        await extensionApi.storage.sync.set(syncSettings);
+        await extensionApi.storage.local.set(localSettings);
+        await extensionApi.storage.sync.remove(['apiUrl', 'connectionToken']);
+        await Logger.info('Settings migrated to split sync/local storage');
+
+        return true;
+    }
+
+    if (!syncStored.apiUrl && !syncStored.connectionToken) {
         return false;
     }
 
     const accounts = [
         normalizeAccount({
             name: '默认账号',
-            apiUrl: stored.apiUrl || '',
-            connectionToken: stored.connectionToken || '',
+            apiUrl: syncStored.apiUrl || '',
+            connectionToken: syncStored.connectionToken || '',
             syncSource: 'default',
             cookieStoreId: ''
         }, 0)
     ];
+    const { syncSettings, localSettings } = splitSettingsForStorage({
+        accounts,
+        refreshInterval: normalizeRefreshInterval(syncStored.refreshInterval)
+    });
 
-    await extensionApi.storage.sync.set({ accounts });
+    await extensionApi.storage.sync.set(syncSettings);
+    await extensionApi.storage.local.set(localSettings);
     await extensionApi.storage.sync.remove(['apiUrl', 'connectionToken']);
     await Logger.info('Legacy single-account config migrated');
 
@@ -387,6 +436,57 @@ function normalizeRefreshInterval(value) {
     }
 
     return parsed;
+}
+
+function splitSettingsForStorage(settings) {
+    const accountSecrets = {};
+    const publicAccounts = settings.accounts.map((account) => {
+        if (account.connectionToken) {
+            accountSecrets[account.id] = account.connectionToken;
+        }
+
+        return {
+            id: account.id,
+            name: account.name,
+            apiUrl: account.apiUrl,
+            syncSource: account.syncSource,
+            cookieStoreId: account.cookieStoreId
+        };
+    });
+
+    return {
+        syncSettings: {
+            accounts: publicAccounts,
+            refreshInterval: settings.refreshInterval
+        },
+        localSettings: {
+            [ACCOUNT_SECRETS_KEY]: accountSecrets
+        }
+    };
+}
+
+function normalizeSecretsMap(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {};
+    }
+
+    return Object.fromEntries(
+        Object.entries(value)
+            .filter(([, token]) => typeof token === 'string' && token.trim())
+            .map(([accountId, token]) => [accountId, token.trim()])
+    );
+}
+
+function resolveAccountSecret(account, localSecrets) {
+    if (account?.id && typeof localSecrets[account.id] === 'string' && localSecrets[account.id].trim()) {
+        return localSecrets[account.id].trim();
+    }
+
+    if (typeof account?.connectionToken === 'string') {
+        return account.connectionToken.trim();
+    }
+
+    return '';
 }
 
 function createId() {

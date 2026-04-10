@@ -135,6 +135,19 @@
         .info-section strong {
             color: #333;
         }
+        .info-section a {
+            color: #1967d2;
+            text-decoration: none;
+        }
+        .info-section a:hover {
+            text-decoration: underline;
+        }
+        .privacy-note {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px dashed #d7dce2;
+            line-height: 1.5;
+        }
         .hidden {
             display: none;
         }
@@ -213,6 +226,12 @@
             浏览器 profile 彼此完全隔离。若你有多个 Zen / Firefox profile，需要在每个 profile 里各装一份扩展；
             同一个 profile 里的多账号，可以通过工作区 / 容器 / cookie store 区分。
         </span>
+        <div class="privacy-note">
+            <strong>🔐 数据说明：</strong><br>
+            连接 Token 仅保存在当前浏览器本地，不会写入浏览器同步存储。保存配置后，扩展会按你的设置访问
+            `labs.google` 并把提取到的登录态发送到你指定的接口。<br>
+            <a href="privacy.html" target="_blank" rel="noreferrer">查看隐私政策</a>
+        </div>
     </div>
 
     <script src="popup.js"></script>
