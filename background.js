@@ -80,7 +80,7 @@ extensionApi.alarms.onAlarm.addListener(async (alarm) => {
         return;
     }
 
-    await Logger.info('Alarm triggered, syncing all configured accounts...');
+    await Logger.info('Alarm triggered, syncing current profile config...');
 
     const summary = await syncAllAccounts();
     await notifySummary(summary);
@@ -120,28 +120,21 @@ async function getSetupData() {
     return {
         success: true,
         settings: await loadSettings(),
-        storeOptions: await listCookieStoreOptions(),
         browserInfo: await getBrowserInfoSafe()
     };
 }
 
 async function saveSettings(settings) {
     const normalizedSettings = validateAndNormalizeSettings(settings);
-    const { syncSettings, localSettings } = splitSettingsForStorage(normalizedSettings);
-
-    await extensionApi.storage.sync.set(syncSettings);
-    await extensionApi.storage.local.set(localSettings);
-    await extensionApi.storage.sync.remove(['apiUrl', 'connectionToken']);
+    await extensionApi.storage.local.set({
+        apiUrl: normalizedSettings.apiUrl,
+        connectionToken: normalizedSettings.connectionToken
+    });
 
     await setupAlarm();
     await Logger.info('Config updated', {
-        accounts: normalizedSettings.accounts.map((account) => ({
-            id: account.id,
-            name: account.name,
-            syncSource: account.syncSource,
-            cookieStoreId: account.cookieStoreId || null
-        })),
-        refreshInterval: normalizedSettings.refreshInterval
+        hasApiUrl: Boolean(normalizedSettings.apiUrl),
+        hasConnectionToken: Boolean(normalizedSettings.connectionToken)
     });
 
     return {
@@ -152,24 +145,22 @@ async function saveSettings(settings) {
 
 async function testFirstAccount() {
     const settings = await loadSettings();
-    const firstAccount = settings.accounts[0];
 
-    if (!firstAccount?.apiUrl || !firstAccount?.connectionToken) {
+    if (!settings.apiUrl || !settings.connectionToken) {
         return {
             success: false,
-            error: '请先保存至少一个完整账号配置'
+            error: '请先保存完整的连接接口和连接 Token'
         };
     }
 
-    return extractAndSendToken(firstAccount);
+    return extractAndSendToken(toRuntimeAccount(settings));
 }
 
 async function syncAllAccounts() {
     const settings = await loadSettings();
-    const accounts = settings.accounts.filter((account) => account.apiUrl && account.connectionToken);
 
-    if (!accounts.length) {
-        const error = '没有可同步的账号配置';
+    if (!settings.apiUrl || !settings.connectionToken) {
+        const error = '没有可同步的配置';
         await Logger.error(error);
         return {
             success: false,
@@ -180,19 +171,15 @@ async function syncAllAccounts() {
         };
     }
 
-    const results = [];
-    for (const account of accounts) {
-        results.push(await extractAndSendToken(account));
-    }
-
-    const successCount = results.filter((result) => result.success).length;
-    const failureCount = results.length - successCount;
+    const result = await extractAndSendToken(toRuntimeAccount(settings));
+    const successCount = result.success ? 1 : 0;
+    const failureCount = result.success ? 0 : 1;
 
     return {
-        success: failureCount === 0,
+        success: result.success,
         successCount,
         failureCount,
-        results
+        results: [result]
     };
 }
 
@@ -258,135 +245,121 @@ async function setupAlarm() {
     await extensionApi.alarms.clear(ALARM_NAME);
 
     const settings = await loadSettings();
-    const hasReadyAccount = settings.accounts.some((account) => account.apiUrl && account.connectionToken);
 
-    if (!hasReadyAccount) {
-        await Logger.info('No valid account configured, alarm skipped');
+    if (!settings.apiUrl || !settings.connectionToken) {
+        await Logger.info('No valid config saved, alarm skipped');
         return;
     }
 
     extensionApi.alarms.create(ALARM_NAME, {
-        periodInMinutes: settings.refreshInterval
+        periodInMinutes: DEFAULT_REFRESH_INTERVAL
     });
 
-    await Logger.info(`Alarm set to ${settings.refreshInterval} minutes`);
+    await Logger.info(`Alarm set to ${DEFAULT_REFRESH_INTERVAL} minutes`);
 }
 
 async function loadSettings() {
-    const [syncStored, localStored] = await Promise.all([
-        extensionApi.storage.sync.get([
-            'accounts',
-            'refreshInterval',
-            'apiUrl',
-            'connectionToken'
-        ]),
-        extensionApi.storage.local.get([ACCOUNT_SECRETS_KEY])
-    ]);
-    const localSecrets = normalizeSecretsMap(localStored[ACCOUNT_SECRETS_KEY]);
-
-    let accounts = Array.isArray(syncStored.accounts)
-        ? syncStored.accounts.map((account, index) => normalizeAccount({
-            ...account,
-            connectionToken: resolveAccountSecret(account, localSecrets)
-        }, index))
-        : [];
-
-    if (!accounts.length && (syncStored.apiUrl || syncStored.connectionToken)) {
-        accounts = [
-            normalizeAccount({
-                name: '默认账号',
-                apiUrl: syncStored.apiUrl || '',
-                connectionToken: syncStored.connectionToken || '',
-                syncSource: 'default',
-                cookieStoreId: ''
-            }, 0)
-        ];
-    }
-
-    if (!accounts.length) {
-        accounts = [normalizeAccount({ name: '默认账号' }, 0)];
-    }
+    const localStored = await extensionApi.storage.local.get(['apiUrl', 'connectionToken']);
 
     return {
-        accounts,
-        refreshInterval: normalizeRefreshInterval(syncStored.refreshInterval)
+        apiUrl: typeof localStored.apiUrl === 'string' ? localStored.apiUrl.trim() : '',
+        connectionToken: typeof localStored.connectionToken === 'string' ? localStored.connectionToken.trim() : ''
     };
 }
 
 async function migrateLegacyConfig() {
     const [syncStored, localStored] = await Promise.all([
         extensionApi.storage.sync.get(['accounts', 'refreshInterval', 'apiUrl', 'connectionToken']),
-        extensionApi.storage.local.get([ACCOUNT_SECRETS_KEY])
+        extensionApi.storage.local.get(['apiUrl', 'connectionToken', ACCOUNT_SECRETS_KEY])
     ]);
-    const existingSecrets = normalizeSecretsMap(localStored[ACCOUNT_SECRETS_KEY]);
 
-    if (Array.isArray(syncStored.accounts) && syncStored.accounts.length) {
-        const normalizedAccounts = syncStored.accounts.map((account, index) => normalizeAccount({
-            ...account,
-            connectionToken: resolveAccountSecret(account, existingSecrets)
-        }, index));
-        const needsSanitizedAccounts = syncStored.accounts.some((account) => (
-            Object.prototype.hasOwnProperty.call(account, 'connectionToken')
-        ));
-        const needsSecretMigration = normalizedAccounts.some((account) => (
-            account.connectionToken &&
-            existingSecrets[account.id] !== account.connectionToken
-        ));
-
-        if (!needsSanitizedAccounts && !needsSecretMigration && !syncStored.apiUrl && !syncStored.connectionToken) {
-            return false;
-        }
-
-        const { syncSettings, localSettings } = splitSettingsForStorage({
-            accounts: normalizedAccounts,
-            refreshInterval: normalizeRefreshInterval(syncStored.refreshInterval)
-        });
-
-        await extensionApi.storage.sync.set(syncSettings);
-        await extensionApi.storage.local.set(localSettings);
-        await extensionApi.storage.sync.remove(['apiUrl', 'connectionToken']);
-        await Logger.info('Settings migrated to split sync/local storage');
-
-        return true;
-    }
-
-    if (!syncStored.apiUrl && !syncStored.connectionToken) {
+    if (localStored.apiUrl && localStored.connectionToken) {
         return false;
     }
 
-    const accounts = [
-        normalizeAccount({
-            name: '默认账号',
-            apiUrl: syncStored.apiUrl || '',
-            connectionToken: syncStored.connectionToken || '',
-            syncSource: 'default',
-            cookieStoreId: ''
-        }, 0)
-    ];
-    const { syncSettings, localSettings } = splitSettingsForStorage({
-        accounts,
-        refreshInterval: normalizeRefreshInterval(syncStored.refreshInterval)
-    });
+    const existingSecrets = normalizeSecretsMap(localStored[ACCOUNT_SECRETS_KEY]);
+    const migratedAccount = pickPrimaryAccount(
+        Array.isArray(syncStored.accounts)
+            ? syncStored.accounts.map((account, index) => normalizeAccount({
+                ...account,
+                connectionToken: resolveAccountSecret(account, existingSecrets)
+            }, index))
+            : []
+    );
 
-    await extensionApi.storage.sync.set(syncSettings);
-    await extensionApi.storage.local.set(localSettings);
-    await extensionApi.storage.sync.remove(['apiUrl', 'connectionToken']);
+    if (migratedAccount?.apiUrl && migratedAccount?.connectionToken) {
+        await extensionApi.storage.local.set({
+            apiUrl: migratedAccount.apiUrl,
+            connectionToken: migratedAccount.connectionToken
+        });
+        await Logger.info('Legacy multi-account config migrated to local single-profile config');
+        return true;
+    }
+
+    if (!syncStored.apiUrl || !syncStored.connectionToken) {
+        return false;
+    }
+
+    await extensionApi.storage.local.set({
+        apiUrl: syncStored.apiUrl.trim(),
+        connectionToken: syncStored.connectionToken.trim()
+    });
     await Logger.info('Legacy single-account config migrated');
 
     return true;
 }
 
 function validateAndNormalizeSettings(settings = {}) {
-    const refreshInterval = normalizeRefreshInterval(settings.refreshInterval);
-    const accounts = Array.isArray(settings.accounts) ? settings.accounts : [];
+    const normalized = normalizeRuntimeAccount(settings);
 
-    if (!accounts.length) {
-        throw new Error('至少配置一个账号');
+    if (!normalized.apiUrl || !normalized.connectionToken) {
+        throw new Error('请填写完整的连接接口和连接 Token');
+    }
+
+    try {
+        const parsedUrl = new URL(normalized.apiUrl);
+        if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+            throw new Error('连接接口必须是 http 或 https URL');
+        }
+    } catch (error) {
+        throw new Error('连接接口不是合法 URL');
     }
 
     return {
-        accounts: accounts.map((account, index) => validateAccount(account, index)),
-        refreshInterval
+        apiUrl: normalized.apiUrl,
+        connectionToken: normalized.connectionToken
+    };
+}
+
+function pickPrimaryAccount(accounts = []) {
+    if (!Array.isArray(accounts) || !accounts.length) {
+        return null;
+    }
+
+    return accounts.find((account) => account.apiUrl && account.connectionToken) || accounts[0];
+}
+
+function toRuntimeAccount(settings = {}) {
+    return normalizeRuntimeAccount({
+        name: '当前浏览器 profile',
+        apiUrl: settings.apiUrl,
+        connectionToken: settings.connectionToken,
+        syncSource: 'default',
+        cookieStoreId: ''
+    });
+}
+
+function normalizeRuntimeAccount(settings = {}) {
+    return {
+        name: typeof settings.name === 'string' && settings.name.trim()
+            ? settings.name.trim()
+            : '当前浏览器 profile',
+        apiUrl: typeof settings.apiUrl === 'string' ? settings.apiUrl.trim() : '',
+        connectionToken: typeof settings.connectionToken === 'string' ? settings.connectionToken.trim() : '',
+        syncSource: ['default', 'activeTab', 'store'].includes(settings.syncSource)
+            ? settings.syncSource
+            : 'default',
+        cookieStoreId: typeof settings.cookieStoreId === 'string' ? settings.cookieStoreId.trim() : ''
     };
 }
 
@@ -425,43 +398,6 @@ function normalizeAccount(account = {}, index = 0) {
             ? account.syncSource
             : 'default',
         cookieStoreId: typeof account.cookieStoreId === 'string' ? account.cookieStoreId.trim() : ''
-    };
-}
-
-function normalizeRefreshInterval(value) {
-    const parsed = Number.parseInt(value, 10);
-
-    if (Number.isNaN(parsed) || parsed < 1 || parsed > 1440) {
-        return DEFAULT_REFRESH_INTERVAL;
-    }
-
-    return parsed;
-}
-
-function splitSettingsForStorage(settings) {
-    const accountSecrets = {};
-    const publicAccounts = settings.accounts.map((account) => {
-        if (account.connectionToken) {
-            accountSecrets[account.id] = account.connectionToken;
-        }
-
-        return {
-            id: account.id,
-            name: account.name,
-            apiUrl: account.apiUrl,
-            syncSource: account.syncSource,
-            cookieStoreId: account.cookieStoreId
-        };
-    });
-
-    return {
-        syncSettings: {
-            accounts: publicAccounts,
-            refreshInterval: settings.refreshInterval
-        },
-        localSettings: {
-            [ACCOUNT_SECRETS_KEY]: accountSecrets
-        }
     };
 }
 

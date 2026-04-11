@@ -4,11 +4,13 @@
 
 - Chromium 系列：Chrome、Edge
 - Firefox 系列：Firefox、Zen Browser
-- 一个浏览器 profile 内支持多套账号配置
-- Zen / Firefox 可按默认会话、当前活动标签、或固定 cookie store 绑定不同用户
+- 当前版本按“一个浏览器 profile 一套配置”工作
+- 每个 profile 只需要填写 `API URL` 和 `connectionToken`
+- 扩展会读取当前 profile 的默认 Google Labs 登录态，并同步到 Flow2API
 
 > 注意：浏览器 **profile 之间是完全隔离** 的。  
-> 如果你有多个 Zen / Firefox profile，需要在每个 profile 里分别安装一份扩展；同一个 profile 里的多账号，才可以通过工作区 / 容器 / cookie store 区分。
+> 如果你有多个 Zen / Firefox profile，需要在每个 profile 里分别安装并填写一次连接配置。  
+> 同一个 Google 账号如果同时登录在多个 profile，建议只选择一个 profile 开启定时同步。
 
 需要配合 [Flow2api](https://github.com/TheSmallHanCat/flow2api) 服务使用。
 
@@ -54,38 +56,40 @@
 
 ## 二、 配置指南
 
-1.  **新增一个或多个账号配置**
-    点击插件图标，在弹出窗口中为每个账号配置：
-    - **账号名称**
+1.  **填写连接信息**
+    点击插件图标，只需要填写：
     - **连接接口 (API URL)**
     - **连接 Token**
-    - **会话来源**
-      - `默认会话 / 当前浏览器 profile`
-      - `跟随当前活动标签`
-      - `固定到指定 cookie store`
 
-    刷新时间默认 60 分钟，一般情况下建议 1-6 小时。
+    保存后，扩展会读取当前浏览器 profile 的默认 Google Labs 登录态，并每 60 分钟自动同步一次。
     ![配置界面](image-2.png)
 
-2.  **Zen / Firefox 多账号建议**
-    如果你在 Zen Browser / Firefox 中使用多个工作区、容器或多套登录态：
-    - 在目标工作区或容器页中打开扩展
-    - 选择 `跟随当前活动标签`，或直接固定到指定 `cookie store`
-    - 保存后，定时任务会按该配置对应的会话去抓取 Google Labs 登录态
+2.  **立即测试**
+    点击 `立即同步`，可以马上验证这个 profile 当前的 Google Labs 登录态是否能成功同步。
 
 3.  **获取配置信息**
     如果您不知道如何填写，请登录 **Flow2api 后台** 查看相关的接口地址和访问密钥。
     ![后台查看配置](image-3.png)
 
-## 三、 隐私与存储说明
+## 三、Zen 多 Profile 推荐方案
+
+如果你像现在这样有 **13 个 profiles**，其中只有 **7 个 Google 账号** 分布在不同 profile 里，并且这些账号都能登录 Flow，推荐按下面的思路配置：
+
+1.  只在真正持有 Google Labs 登录态的 profile 里安装和配置扩展。
+2.  每个要用的 profile 里各填一次 `API URL` 和 `connectionToken`。
+3.  如果同一个 Google 账号同时登录在多个 profile，只选一个 profile 启用定时同步。
+4.  其余 profile 可以不装扩展，或者装了但不保存配置。
+5.  不要让多个 profile 长期共用同一个 `API URL + connectionToken` 一起上报，否则通常是谁最后同步谁覆盖。
+
+## 四、 隐私与存储说明
 
 - 扩展会读取 `labs.google` 的登录 Cookie，并提取 `__Secure-next-auth.session-token`
 - 提取到的登录态只会发送到你自己填写的接口地址
-- `连接 Token` 仅保存在当前浏览器本地，不写入浏览器同步存储
-- 账号名称、接口地址、刷新间隔、会话来源等非敏感配置会保存在浏览器同步存储
+- `连接 Token` 始终仅保存在当前浏览器本地，不写入浏览器同步存储
+- `API URL` 等连接配置也仅保存在当前浏览器 profile 本地
 - 更多说明见 [privacy.html](privacy.html)
 
-## 四、 上架前建议
+## 五、 上架前建议
 
 - 如果要发布到扩展市场，建议准备一个可公开访问的 HTTPS 隐私政策页面
 - Chrome Web Store 会重点检查敏感权限、数据用途与隐私披露
