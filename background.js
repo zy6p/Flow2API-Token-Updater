@@ -3,6 +3,7 @@ const extensionApi = globalThis.browser ?? globalThis.chrome;
 const LABS_URL = 'https://labs.google/fx/vi/tools/flow';
 const LABS_COOKIE_URL = 'https://labs.google/';
 const SESSION_COOKIE_NAME = '__Secure-next-auth.session-token';
+const WAITING_FOR_LABS_MESSAGE = 'Flow2API 已连接，等待 Google Labs 登录态。你登录 Labs 后扩展会自动同步。';
 const ACCOUNT_SECRETS_KEY = 'accountSecrets';
 const SYNC_ALARM_NAME = 'flow2apiSafetySync';
 const DEFAULT_SAFETY_SYNC_MINUTES = 360;
@@ -93,9 +94,7 @@ if (extensionApi.cookies?.onChanged) {
         }
 
         if (changeInfo.removed) {
-            void Logger.info('Google Labs session cookie removed', {
-                cause: changeInfo.cause
-            });
+            void handleLabsSessionRemoved(changeInfo);
             return;
         }
 
@@ -159,9 +158,12 @@ async function getSetupData() {
         await hydrateConnectionFromConsole(settings.baseUrl, { openIfMissing: false, activateOnNeedsLogin: false });
     }
 
+    const hydratedSettings = await loadSettings();
+
     return {
         success: true,
-        settings: await loadSettings(),
+        settings: hydratedSettings,
+        hasConnection: Boolean(hydratedSettings.connectionToken),
         browserInfo: await getBrowserInfoSafe(),
         suggestedBaseUrl
     };
@@ -188,13 +190,32 @@ async function connectBaseUrl(rawBaseUrl) {
         return connection;
     }
 
-    return syncCurrentSession({
+    const syncResult = await syncCurrentSession({
         reason: 'manual_connect',
         allowLabsWakeup: true,
         notifyOnError: false,
         adminToken: connection.adminToken,
         baseUrl: normalized.origin
     });
+
+    if (syncResult.success) {
+        return {
+            ...syncResult,
+            success: true,
+            hasConnection: true,
+            synced: true
+        };
+    }
+
+    return {
+        success: true,
+        hasConnection: true,
+        synced: false,
+        lastSync: syncResult.lastSync || (await loadSettings()).lastSync,
+        message: syncResult.lastSync?.status === 'waiting_session'
+            ? WAITING_FOR_LABS_MESSAGE
+            : `Flow2API 已连接，但首次同步失败：${syncResult.error || '未知错误'}`
+    };
 }
 
 async function openConsole(rawBaseUrl) {
@@ -342,30 +363,34 @@ async function performSync({
             message: syncPayload.message || '同步成功'
         };
     } catch (error) {
-        const lastSync = {
-            status: 'error',
-            reason,
-            syncedAt: new Date().toISOString(),
-            email: settings.lastSync?.email || null,
-            atExpires: settings.lastSync?.atExpires || null,
-            sessionExpiresAt: settings.lastSync?.sessionExpiresAt || null,
-            action: null,
-            message: error.message
-        };
+        const waitingForLabs = isMissingLabsSessionError(error);
+        const lastSync = waitingForLabs
+            ? createWaitingSessionState(settings.lastSync, reason)
+            : {
+                status: 'error',
+                reason,
+                syncedAt: settings.lastSync?.syncedAt || null,
+                checkedAt: new Date().toISOString(),
+                email: settings.lastSync?.email || null,
+                atExpires: settings.lastSync?.atExpires || null,
+                sessionExpiresAt: settings.lastSync?.sessionExpiresAt || null,
+                action: null,
+                message: error.message
+            };
 
         await extensionApi.storage.local.set({ lastSync });
-        await Logger.error('Session sync failed', {
+        await (waitingForLabs ? Logger.info : Logger.error).call(Logger, waitingForLabs ? 'Waiting for Google Labs session' : 'Session sync failed', {
             reason,
             error: error.message
         });
 
-        if (notifyOnError) {
+        if (notifyOnError && !waitingForLabs) {
             await createNotification('Flow2API 同步失败', error.message);
         }
 
         return {
             success: false,
-            error: error.message,
+            error: waitingForLabs ? WAITING_FOR_LABS_MESSAGE : error.message,
             lastSync
         };
     }
@@ -615,34 +640,38 @@ async function getSessionCookie({ loadIfMissing }) {
 }
 
 async function findSessionCookie() {
-    const directLookups = [
-        { url: LABS_URL, name: SESSION_COOKIE_NAME },
-        { url: LABS_COOKIE_URL, name: SESSION_COOKIE_NAME }
-    ];
+    const storeIds = await collectCandidateCookieStoreIds();
+    const candidates = [];
+    const seen = new Set();
 
-    for (const lookup of directLookups) {
-        try {
-            const cookie = await extensionApi.cookies.get(lookup);
-            if (cookie?.value) {
-                return cookie;
+    for (const details of buildSessionCookieQueries(storeIds)) {
+        const cookies = await safeGetAllCookies(details);
+
+        for (const cookie of cookies) {
+            if (!cookie?.value) {
+                continue;
             }
-        } catch (error) {
-            await Logger.info('Direct cookie lookup failed', {
-                lookup,
-                error: error.message
-            });
+
+            const key = serializeCookieIdentity(cookie);
+            if (seen.has(key)) {
+                continue;
+            }
+
+            seen.add(key);
+            candidates.push(cookie);
         }
     }
 
-    try {
-        const cookies = await extensionApi.cookies.getAll({ domain: 'labs.google' });
-        return cookies.find((item) => item.name === SESSION_COOKIE_NAME) || null;
-    } catch (error) {
-        await Logger.info('Cookie enumeration failed', {
-            error: error.message
+    const preferred = pickPreferredSessionCookie(candidates);
+
+    if (!preferred) {
+        await Logger.info('Google Labs session cookie not found', {
+            storeIds,
+            checkedVariants: buildSessionCookieQueries(storeIds).length
         });
-        return null;
     }
+
+    return preferred;
 }
 
 async function openLabsTab() {
@@ -720,6 +749,136 @@ async function refreshSafetyAlarm(cookie = null) {
     await Logger.info('Safety sync scheduled', {
         scheduledAt: new Date(when).toISOString()
     });
+}
+
+async function handleLabsSessionRemoved(changeInfo) {
+    await Logger.info('Google Labs session cookie removed', {
+        cause: changeInfo.cause
+    });
+
+    const settings = await loadSettings();
+    if (!settings.connectionToken) {
+        return;
+    }
+
+    const lastSync = createWaitingSessionState(settings.lastSync, 'cookie_removed');
+    await extensionApi.storage.local.set({ lastSync });
+}
+
+async function collectCandidateCookieStoreIds() {
+    const ids = new Set();
+
+    if (typeof extensionApi.cookies?.getAllCookieStores === 'function') {
+        try {
+            const stores = await extensionApi.cookies.getAllCookieStores();
+            for (const store of stores) {
+                if (store?.id) {
+                    ids.add(store.id);
+                }
+            }
+        } catch (error) {
+            // Ignore store enumeration errors.
+        }
+    }
+
+    try {
+        const tabs = await extensionApi.tabs.query({});
+
+        for (const tab of tabs) {
+            if (!tab?.url || !tab.cookieStoreId) {
+                continue;
+            }
+
+            try {
+                if (new URL(tab.url).origin === 'https://labs.google') {
+                    ids.add(tab.cookieStoreId);
+                }
+            } catch (error) {
+                // Ignore invalid tab URLs.
+            }
+        }
+    } catch (error) {
+        // Ignore tab enumeration errors.
+    }
+
+    return ids.size > 0 ? [...ids] : [null];
+}
+
+function buildSessionCookieQueries(storeIds) {
+    const variants = [
+        { domain: 'labs.google', name: SESSION_COOKIE_NAME },
+        { url: LABS_COOKIE_URL, name: SESSION_COOKIE_NAME },
+        { domain: 'labs.google', name: SESSION_COOKIE_NAME, firstPartyDomain: null },
+        { url: LABS_COOKIE_URL, name: SESSION_COOKIE_NAME, firstPartyDomain: null },
+        { domain: 'labs.google', name: SESSION_COOKIE_NAME, partitionKey: {} },
+        { url: LABS_COOKIE_URL, name: SESSION_COOKIE_NAME, partitionKey: {} },
+        { domain: 'labs.google', name: SESSION_COOKIE_NAME, firstPartyDomain: null, partitionKey: {} },
+        { url: LABS_COOKIE_URL, name: SESSION_COOKIE_NAME, firstPartyDomain: null, partitionKey: {} }
+    ];
+
+    const queries = [];
+
+    for (const variant of variants) {
+        for (const storeId of storeIds) {
+            queries.push(storeId ? { ...variant, storeId } : { ...variant });
+        }
+    }
+
+    return queries;
+}
+
+async function safeGetAllCookies(details) {
+    try {
+        const cookies = await extensionApi.cookies.getAll(details);
+        return Array.isArray(cookies) ? cookies : [];
+    } catch (error) {
+        return [];
+    }
+}
+
+function serializeCookieIdentity(cookie) {
+    return [
+        cookie.storeId || '',
+        cookie.firstPartyDomain || '',
+        cookie.partitionKey?.topLevelSite || '',
+        cookie.domain || '',
+        cookie.path || '',
+        cookie.name || '',
+        cookie.value || ''
+    ].join('|');
+}
+
+function pickPreferredSessionCookie(cookies) {
+    if (!Array.isArray(cookies) || cookies.length === 0) {
+        return null;
+    }
+
+    return [...cookies]
+        .sort((left, right) => scoreSessionCookie(right) - scoreSessionCookie(left))
+        .find((cookie) => cookie?.value) || null;
+}
+
+function scoreSessionCookie(cookie) {
+    if (!cookie) {
+        return 0;
+    }
+
+    let score = 0;
+    const domain = `${cookie.domain || ''}`.replace(/^\./, '');
+
+    if (domain === 'labs.google') {
+        score += 8;
+    }
+
+    if (cookie.path === '/') {
+        score += 4;
+    }
+
+    if (typeof cookie.expirationDate === 'number') {
+        score += Math.floor(cookie.expirationDate / 1000);
+    }
+
+    return score;
 }
 
 async function findConsoleTabs(baseUrl) {
@@ -1090,6 +1249,29 @@ function isTrackedSessionCookie(cookie) {
 
     const domain = `${cookie.domain || ''}`.replace(/^\./, '');
     return domain === 'labs.google';
+}
+
+function isMissingLabsSessionError(errorOrMessage) {
+    const message = typeof errorOrMessage === 'string'
+        ? errorOrMessage
+        : errorOrMessage?.message;
+
+    return typeof message === 'string'
+        && message.includes('未找到 Google Labs 登录态');
+}
+
+function createWaitingSessionState(previousLastSync, reason) {
+    return {
+        status: 'waiting_session',
+        reason,
+        syncedAt: previousLastSync?.syncedAt || null,
+        checkedAt: new Date().toISOString(),
+        email: previousLastSync?.email || null,
+        atExpires: previousLastSync?.atExpires || null,
+        sessionExpiresAt: previousLastSync?.sessionExpiresAt || null,
+        action: null,
+        message: WAITING_FOR_LABS_MESSAGE
+    };
 }
 
 function formatCookieExpiry(cookie) {

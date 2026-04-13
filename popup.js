@@ -4,7 +4,8 @@ const state = {
     baseUrl: '',
     suggestedBaseUrl: '',
     lastSync: null,
-    browserInfo: null
+    browserInfo: null,
+    hasConnection: false
 };
 
 let statusTimer = null;
@@ -15,7 +16,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 function bindEvents() {
-    document.getElementById('connectBtn').addEventListener('click', connectAndSync);
+    document.getElementById('connectBtn').addEventListener('click', connectFlow2Api);
     document.getElementById('consoleBtn').addEventListener('click', openConsole);
 }
 
@@ -36,11 +37,16 @@ async function loadSetupData() {
         state.lastSync = response.settings?.lastSync || null;
         state.browserInfo = response.browserInfo || null;
         state.suggestedBaseUrl = response.suggestedBaseUrl || '';
+        state.hasConnection = Boolean(response.hasConnection || response.settings?.connectionToken);
 
         render(true);
 
         if (state.lastSync?.status === 'success') {
             showStatus('已读取当前配置', 'success');
+        } else if (state.lastSync?.status === 'error') {
+            showStatus(state.lastSync.message || '上次同步失败，需要处理', 'error');
+        } else if (state.lastSync?.status === 'waiting_session' || state.hasConnection) {
+            showStatus(state.lastSync?.message || 'Flow2API 已连接，等待自动同步', 'info');
         } else if (state.baseUrl) {
             showStatus('已准备好连接 Flow2API', 'info');
         } else {
@@ -73,19 +79,23 @@ function renderSummary() {
         `${browserName} 会监听 Google Labs 登录态变化，并自动把当前 profile 的 session 同步到 Flow2API。`;
 
     const hasBaseUrl = Boolean(state.baseUrl);
+    const hasConnection = Boolean(state.hasConnection);
     const lastSync = state.lastSync;
 
     let stateLabel = '等待连接';
     let stateClass = 'waiting';
 
-    if (hasBaseUrl && lastSync?.status === 'success') {
+    if (hasConnection && lastSync?.status === 'error') {
+        stateLabel = '需要处理';
+        stateClass = 'warning';
+    } else if (hasConnection) {
         stateLabel = '已连接';
         stateClass = 'connected';
     } else if (hasBaseUrl && lastSync?.status === 'error') {
         stateLabel = '需要处理';
         stateClass = 'warning';
     } else if (hasBaseUrl) {
-        stateLabel = '等待首次同步';
+        stateLabel = '等待连接';
         stateClass = 'waiting';
     }
 
@@ -102,11 +112,14 @@ function renderSummary() {
         lastSync?.atExpires || lastSync?.sessionExpiresAt
     );
     document.getElementById('summaryLastSync').textContent = formatDateTime(lastSync?.syncedAt);
-    document.getElementById('summaryMessage').textContent = lastSync?.message || '填入 Base URL 后，扩展会自动读取控制台配置并同步。';
+    document.getElementById('summaryMessage').textContent = lastSync?.message
+        || (hasConnection
+            ? 'Flow2API 已连接。检测到 Google Labs 登录态后会自动同步。'
+            : '填入 Base URL 后，扩展会自动读取控制台配置并同步。');
 
 }
 
-async function connectAndSync() {
+async function connectFlow2Api() {
     try {
         const baseUrl = collectBaseUrl();
         const originPattern = toOriginPattern(baseUrl);
@@ -140,9 +153,17 @@ async function connectAndSync() {
 
         state.baseUrl = normalizeBaseUrl(baseUrl);
         state.lastSync = response.lastSync || state.lastSync;
+        state.hasConnection = true;
         render();
 
-        showStatus(response.message || '已连接并同步成功', 'success');
+        const statusType = response.lastSync?.status === 'error'
+            ? 'error'
+            : (response.synced === false ? 'info' : 'success');
+
+        showStatus(
+            response.message || 'Flow2API 已连接',
+            statusType
+        );
     } catch (error) {
         showStatus(error.message, 'error');
     } finally {
