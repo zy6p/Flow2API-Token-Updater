@@ -243,18 +243,12 @@ async function openConsole() {
 }
 
 async function ensureHostPermission(originPattern) {
-    if (!extensionApi.permissions?.contains || !extensionApi.permissions?.request) {
+    if (!extensionApi.permissions?.request) {
         return;
     }
 
-    const granted = await extensionApi.permissions.contains({
-        origins: [originPattern]
-    });
-
-    if (granted) {
-        return;
-    }
-
+    // permissions.request must be triggered directly from a user gesture.
+    // Avoid any preceding async permission checks here.
     const approved = await extensionApi.permissions.request({
         origins: [originPattern]
     });
