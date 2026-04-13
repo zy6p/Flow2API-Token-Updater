@@ -10,6 +10,8 @@ CHROMIUM_DIR="${ROOT_DIR}/dist/chromium"
 VERSION="$(node -p "require('${ROOT_DIR}/manifest.json').version")"
 BUILD_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 GECKO_TEMP_FILE="flow2api_token_updater-gecko-temp-${VERSION}.zip"
+GECKO_RELEASE_ZIP="flow2api_token_updater-${VERSION}.zip"
+GECKO_RELEASE_XPI="flow2api_token_updater-${VERSION}.xpi"
 CHROMIUM_VERSIONED_FILE="Flow2API-Token-Updater-chromium-${VERSION}.zip"
 
 hash_file() {
@@ -21,24 +23,29 @@ hash_file() {
 }
 
 "${ROOT_DIR}/scripts/build_gecko_temp_bundle.sh"
+"${ROOT_DIR}/scripts/build_gecko_release_bundle.sh"
+"${ROOT_DIR}/scripts/build_chromium_bundle.sh"
 
 rm -rf "${OUT_DIR}"
 mkdir -p "${OUT_DIR}/downloads"
 
 cp "${ROOT_DIR}/privacy.html" "${OUT_DIR}/privacy.html"
+cp "${ROOT_DIR}/cloudflare-pages/_headers" "${OUT_DIR}/_headers"
 
-if [[ -f "${FIREFOX_DIR}/flow2api_token_updater-${VERSION}.xpi" ]]; then
-  cp "${FIREFOX_DIR}/flow2api_token_updater-${VERSION}.xpi" "${OUT_DIR}/downloads/latest-firefox.xpi"
+if [[ -f "${FIREFOX_DIR}/${GECKO_RELEASE_XPI}" ]]; then
+  cp "${FIREFOX_DIR}/${GECKO_RELEASE_XPI}" "${OUT_DIR}/downloads/latest-firefox.xpi"
+  cp "${FIREFOX_DIR}/${GECKO_RELEASE_XPI}" "${OUT_DIR}/downloads/${GECKO_RELEASE_XPI}"
 fi
 
-if [[ -f "${FIREFOX_DIR}/flow2api_token_updater-${VERSION}.zip" ]]; then
-  cp "${FIREFOX_DIR}/flow2api_token_updater-${VERSION}.zip" "${OUT_DIR}/downloads/latest-firefox.zip"
+if [[ -f "${FIREFOX_DIR}/${GECKO_RELEASE_ZIP}" ]]; then
+  cp "${FIREFOX_DIR}/${GECKO_RELEASE_ZIP}" "${OUT_DIR}/downloads/latest-firefox.zip"
+  cp "${FIREFOX_DIR}/${GECKO_RELEASE_ZIP}" "${OUT_DIR}/downloads/${GECKO_RELEASE_ZIP}"
 fi
 
 cp "${FIREFOX_DIR}/${GECKO_TEMP_FILE}" "${OUT_DIR}/downloads/latest-gecko-temporary.zip"
 cp "${FIREFOX_DIR}/${GECKO_TEMP_FILE}" "${OUT_DIR}/downloads/${GECKO_TEMP_FILE}"
-cp "${CHROMIUM_DIR}/Flow2API-Token-Updater-chromium.zip" "${OUT_DIR}/downloads/latest-chromium.zip"
-cp "${CHROMIUM_DIR}/Flow2API-Token-Updater-chromium.zip" "${OUT_DIR}/downloads/${CHROMIUM_VERSIONED_FILE}"
+cp "${CHROMIUM_DIR}/${CHROMIUM_VERSIONED_FILE}" "${OUT_DIR}/downloads/latest-chromium.zip"
+cp "${CHROMIUM_DIR}/${CHROMIUM_VERSIONED_FILE}" "${OUT_DIR}/downloads/${CHROMIUM_VERSIONED_FILE}"
 
 GECKO_SHA256="$(hash_file "${OUT_DIR}/downloads/${GECKO_TEMP_FILE}")"
 CHROMIUM_SHA256="$(hash_file "${OUT_DIR}/downloads/${CHROMIUM_VERSIONED_FILE}")"
