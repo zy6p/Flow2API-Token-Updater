@@ -17,8 +17,14 @@ mkdir -p "${OUT_DIR}/downloads"
 cp "${ROOT_DIR}/cloudflare-pages/index.html" "${OUT_DIR}/index.html"
 cp "${ROOT_DIR}/privacy.html" "${OUT_DIR}/privacy.html"
 
-cp "${FIREFOX_DIR}/flow2api_token_updater-1.0.0.xpi" "${OUT_DIR}/downloads/latest-firefox.xpi"
-cp "${FIREFOX_DIR}/flow2api_token_updater-1.0.0.zip" "${OUT_DIR}/downloads/latest-firefox.zip"
+if [[ -f "${FIREFOX_DIR}/flow2api_token_updater-${VERSION}.xpi" ]]; then
+  cp "${FIREFOX_DIR}/flow2api_token_updater-${VERSION}.xpi" "${OUT_DIR}/downloads/latest-firefox.xpi"
+fi
+
+if [[ -f "${FIREFOX_DIR}/flow2api_token_updater-${VERSION}.zip" ]]; then
+  cp "${FIREFOX_DIR}/flow2api_token_updater-${VERSION}.zip" "${OUT_DIR}/downloads/latest-firefox.zip"
+fi
+
 cp "${FIREFOX_DIR}/flow2api_token_updater-gecko-temp-${VERSION}.zip" "${OUT_DIR}/downloads/latest-gecko-temporary.zip"
 cp "${CHROMIUM_DIR}/Flow2API-Token-Updater-chromium.zip" "${OUT_DIR}/downloads/latest-chromium.zip"
 

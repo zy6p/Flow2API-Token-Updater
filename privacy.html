@@ -73,40 +73,42 @@
     <main>
         <div class="card">
             <h1>Flow2API Token Updater 隐私政策</h1>
-            <div class="meta">最后更新：2026-04-11</div>
+            <div class="meta">最后更新：2026-04-13</div>
 
             <p>
                 Flow2API Token Updater 是一个本地浏览器扩展，用于在用户明确配置后，
-                从 <code>https://labs.google/</code> 读取指定登录态，并把提取到的会话 Token
-                发送到用户自行配置的 Flow2API 接口。
+                从 <code>https://labs.google/</code> 读取当前浏览器 profile 的登录态，并把提取到的会话 Token
+                发送到用户自己填写的 Flow2API Base URL 对应接口。
             </p>
 
             <h2>扩展会访问哪些数据</h2>
             <ul>
                 <li>浏览器 Cookie：仅用于读取 <code>labs.google</code> 相关会话，并查找 <code>__Secure-next-auth.session-token</code>。</li>
-                <li>用户配置：接口地址、连接 Token，以及本地运行所需的最小配置。</li>
-                <li>连接 Token：用于把提取到的会话数据发送到用户配置的接口。</li>
+                <li>用户配置：Base URL、自动发现到的连接 Token，以及本地运行所需的最小配置。</li>
+                <li>Flow2API 控制台本地登录状态：当用户填写 Base URL 且授权访问该站点时，扩展会尝试读取同浏览器中该 Flow2API 控制台的本地登录状态，用于自动获取插件连接 Token。</li>
+                <li>连接 Token：用于把提取到的会话数据发送到用户配置的 Flow2API 接口。</li>
                 <li>本地运行日志：仅用于帮助用户排查同步问题。</li>
             </ul>
 
             <h2>这些数据如何存储</h2>
             <ul>
-                <li>连接 Token、接口地址和运行日志，始终仅保存在当前浏览器 profile 的本地存储中，不写入浏览器同步存储。</li>
+                <li>连接 Token、Base URL 和运行日志，始终仅保存在当前浏览器 profile 的本地存储中，不写入浏览器同步存储。</li>
+                <li>Flow2API 控制台本地登录状态仅用于即时发现插件连接配置；扩展不会把管理员登录 token 单独同步到第三方服务器。</li>
                 <li>浏览器 profile 彼此独立；如果用户在多个 Zen / Firefox profile 中安装扩展，每个 profile 都会维护自己的本地配置。</li>
                 <li>扩展不会把数据发送到扩展作者控制的服务器。</li>
             </ul>
 
             <h2>这些数据会发送到哪里</h2>
             <ul>
-                <li>扩展只会把提取到的会话 Token 发送到用户自己在配置界面中填写的接口地址。</li>
-                <li>请求使用用户自己填写的连接 Token 作为 <code>Authorization: Bearer</code> 认证头。</li>
+                <li>扩展只会把提取到的会话 Token 发送到用户自己填写的 Base URL 对应接口 <code>/api/plugin/update-token</code>。</li>
+                <li>请求使用从用户自己 Flow2API 控制台自动发现到的连接 Token 作为 <code>Authorization: Bearer</code> 认证头。</li>
                 <li>除上述目标接口外，扩展不向任何第三方发送分析、广告或跟踪数据。</li>
             </ul>
 
             <h2>数据用途</h2>
             <ul>
                 <li>帮助用户将 Google Labs 登录态同步到自己的 Flow2API 服务。</li>
-                <li>在用户主动点击测试或到达定时任务时执行同步。</li>
+                <li>在用户首次连接后，监听 Google Labs 登录态变化并自动同步；必要时做后台兜底检查。</li>
                 <li>通过本地日志展示成功或失败状态，便于排查问题。</li>
             </ul>
 
@@ -114,7 +116,7 @@
             <ul>
                 <li>用户可以随时在扩展界面修改或删除当前浏览器 profile 的本地配置。</li>
                 <li>用户可以清空日志，或直接卸载扩展以删除本地存储数据。</li>
-                <li>如果不希望扩展访问某个账号或容器的登录态，请删除对应配置或停止使用该浏览器 profile。</li>
+                <li>如果不希望扩展访问某个 Base URL，对应域名权限可以在浏览器扩展权限界面中撤销。</li>
             </ul>
 
             <h2>发布与审核说明</h2>

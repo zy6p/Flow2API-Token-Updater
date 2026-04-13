@@ -4,17 +4,25 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ARTIFACTS_DIR="${ROOT_DIR}/web-ext-artifacts"
+STAGE_DIR="$(mktemp -d)"
+
+cleanup() {
+  rm -rf "${STAGE_DIR}"
+}
+trap cleanup EXIT
 
 if [[ -z "${AMO_API_KEY:-}" || -z "${AMO_API_SECRET:-}" ]]; then
   echo "AMO_API_KEY and AMO_API_SECRET are required." >&2
   exit 1
 fi
 
+"${ROOT_DIR}/scripts/prepare_gecko_source.sh" "${STAGE_DIR}"
+
 npx --yes web-ext sign \
-  --source-dir "${ROOT_DIR}" \
+  --source-dir "${STAGE_DIR}" \
   --artifacts-dir "${ARTIFACTS_DIR}" \
   --channel unlisted \
   --api-key "${AMO_API_KEY}" \
   --api-secret "${AMO_API_SECRET}" \
   --approval-timeout 0 \
-  --ignore-files ".git/**" ".github/**" ".cloudflare-pages" ".cloudflare-pages/**" "cloudflare-pages" "cloudflare-pages/**" "dist" "dist/**" "scripts" "scripts/**" "store" "store/**" "web-ext-artifacts" "web-ext-artifacts/**" ".wrangler" ".wrangler/**" ".gitignore" "readme.md" "image.png" "image-1.png" "image-2.png" "image-3.png"
+  --ignore-files "INSTALL.txt"

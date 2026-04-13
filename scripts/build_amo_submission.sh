@@ -7,6 +7,12 @@ ARTIFACTS_DIR="${ROOT_DIR}/web-ext-artifacts"
 VERSION="$(node -p "require('${ROOT_DIR}/manifest.json').version")"
 PACKAGE_NAME="flow2api-token-updater-amo-${VERSION}.zip"
 SOURCE_NAME="flow2api-token-updater-source-${VERSION}.tar.gz"
+STAGE_DIR="$(mktemp -d)"
+
+cleanup() {
+  rm -rf "${STAGE_DIR}"
+}
+trap cleanup EXIT
 
 IGNORE_FILES=(
   ".git/**"
@@ -39,12 +45,14 @@ for pattern in "${IGNORE_FILES[@]}"; do
 done
 
 mkdir -p "${ARTIFACTS_DIR}"
+"${ROOT_DIR}/scripts/prepare_gecko_source.sh" "${STAGE_DIR}"
 
 npx --yes web-ext build \
-  --source-dir "${ROOT_DIR}" \
+  --source-dir "${STAGE_DIR}" \
   --artifacts-dir "${ARTIFACTS_DIR}" \
   --filename "${PACKAGE_NAME}" \
   --overwrite-dest \
+  --ignore-files "INSTALL.txt" \
   "${IGNORE_ARGS[@]}"
 
 tar -C "${ROOT_DIR}" \

@@ -14,21 +14,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "${FIREFOX_DIR}"
-
-for path in \
-  background.js \
-  icon128.png \
-  icon16.png \
-  icon48.png \
-  logs.html \
-  logs.js \
-  manifest.json \
-  popup.html \
-  popup.js \
-  privacy.html
-do
-  cp "${ROOT_DIR}/${path}" "${STAGE_DIR}/${path}"
-done
+"${ROOT_DIR}/scripts/prepare_gecko_source.sh" "${STAGE_DIR}"
 
 cat > "${STAGE_DIR}/INSTALL.txt" <<'EOF'
 Firefox / Zen 临时安装说明
@@ -40,6 +26,7 @@ Firefox / Zen 临时安装说明
 
 注意：
 - 这是开发态临时加载，浏览器重启后需要重新加载。
+- 这个包里的 manifest 已按 Gecko 兼容方式生成，不要直接加载仓库根目录的 manifest.json。
 - 未签名的 .xpi 在 about:addons 中通常会显示“附加组件似乎已损坏”。
 EOF
 

@@ -5,210 +5,333 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Flow2API Token Updater</title>
     <style>
+        :root {
+            --ink: #1e2330;
+            --muted: #5c6474;
+            --line: rgba(26, 35, 50, 0.12);
+            --card: rgba(255, 255, 255, 0.88);
+            --accent: #0f766e;
+            --accent-strong: #115e59;
+            --accent-soft: rgba(15, 118, 110, 0.12);
+            --warn: #b45309;
+            --warn-soft: rgba(180, 83, 9, 0.12);
+            --danger: #b42318;
+            --danger-soft: rgba(180, 35, 24, 0.12);
+            --surface: linear-gradient(180deg, #f3efe5 0%, #eef3f4 46%, #f7f8fb 100%);
+        }
+
         * {
-            margin: 0;
-            padding: 0;
             box-sizing: border-box;
         }
+
         body {
-            width: 400px;
-            padding: 20px;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            font-size: 14px;
-            color: #333;
+            width: 368px;
+            margin: 0;
+            padding: 18px;
+            font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at top right, rgba(15, 118, 110, 0.16), transparent 34%),
+                radial-gradient(circle at bottom left, rgba(180, 83, 9, 0.08), transparent 28%),
+                var(--surface);
         }
+
+        .shell {
+            border: 1px solid rgba(255, 255, 255, 0.75);
+            background: var(--card);
+            backdrop-filter: blur(18px);
+            border-radius: 20px;
+            padding: 18px;
+            box-shadow: 0 16px 40px rgba(27, 39, 51, 0.14);
+        }
+
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid rgba(15, 118, 110, 0.12);
+            color: var(--muted);
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
         h1 {
-            font-size: 18px;
-            margin-bottom: 16px;
-            color: #1a73e8;
+            margin: 14px 0 8px;
+            font-size: 24px;
+            line-height: 1.1;
+            font-weight: 680;
         }
-        .form-group {
-            margin-bottom: 16px;
+
+        .subtitle {
+            margin: 0 0 18px;
+            font-size: 13px;
+            line-height: 1.55;
+            color: var(--muted);
         }
+
+        .field {
+            margin-bottom: 14px;
+        }
+
         label {
             display: block;
-            margin-bottom: 6px;
-            font-weight: 500;
-            color: #555;
-        }
-        input[type="text"],
-        input[type="number"],
-        select {
-            width: 100%;
-            padding: 8px 12px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 14px;
-            background: white;
-        }
-        input[type="text"]:focus,
-        input[type="number"]:focus,
-        select:focus {
-            outline: none;
-            border-color: #1a73e8;
-        }
-        .row {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-        .row > * {
-            min-width: 0;
-        }
-        .row-grow {
-            flex: 1;
-        }
-        .mini-btn {
-            flex: none;
-            padding: 8px 10px;
-            font-size: 13px;
-        }
-        .hint {
+            margin-bottom: 8px;
             font-size: 12px;
-            color: #666;
-            margin-top: 4px;
+            font-weight: 650;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--muted);
         }
-        .button-group {
-            display: flex;
-            gap: 8px;
-            margin-top: 20px;
-        }
-        button {
-            flex: 1;
-            padding: 10px;
-            border: none;
-            border-radius: 4px;
+
+        input[type="text"] {
+            width: 100%;
+            border: 1px solid rgba(30, 35, 48, 0.12);
+            border-radius: 14px;
+            padding: 13px 14px;
             font-size: 14px;
-            font-weight: 500;
+            font-family: inherit;
+            color: var(--ink);
+            background: rgba(255, 255, 255, 0.9);
+            transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: rgba(15, 118, 110, 0.35);
+            box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
+            transform: translateY(-1px);
+        }
+
+        .hint {
+            margin-top: 8px;
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--muted);
+        }
+
+        .actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 14px;
+        }
+
+        button {
+            border: none;
+            border-radius: 14px;
+            padding: 12px 14px;
+            font-size: 14px;
+            font-weight: 650;
+            font-family: inherit;
             cursor: pointer;
-            transition: background-color 0.2s;
+            transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
         }
+
+        button:hover:not(:disabled) {
+            transform: translateY(-1px);
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.55;
+        }
+
         .btn-primary {
-            background-color: #1a73e8;
             color: white;
+            background: linear-gradient(135deg, var(--accent) 0%, #147d74 100%);
+            box-shadow: 0 10px 22px rgba(15, 118, 110, 0.26);
         }
-        .btn-primary:hover {
-            background-color: #1557b0;
-        }
+
         .btn-secondary {
-            background-color: #f1f3f4;
-            color: #333;
+            color: var(--ink);
+            background: rgba(255, 255, 255, 0.92);
+            border: 1px solid rgba(30, 35, 48, 0.1);
         }
-        .btn-secondary:hover {
-            background-color: #e8eaed;
+
+        .btn-plain {
+            width: 100%;
+            margin-top: 10px;
+            color: var(--muted);
+            background: transparent;
+            border: 1px dashed rgba(30, 35, 48, 0.12);
         }
+
         .status {
-            margin-top: 16px;
-            padding: 12px;
-            border-radius: 4px;
-            font-size: 13px;
             display: none;
+            margin-top: 14px;
+            padding: 12px 14px;
+            border-radius: 14px;
+            font-size: 13px;
+            line-height: 1.5;
             white-space: pre-line;
         }
-        .status.success {
-            background-color: #e6f4ea;
-            color: #137333;
-            border: 1px solid #c6e1c6;
-        }
-        .status.error {
-            background-color: #fce8e6;
-            color: #c5221f;
-            border: 1px solid #f5c2c1;
-        }
+
         .status.info {
-            background-color: #e8f0fe;
-            color: #1967d2;
-            border: 1px solid #d2e3fc;
+            color: #0f4c81;
+            background: rgba(15, 118, 110, 0.08);
+            border: 1px solid rgba(15, 118, 110, 0.14);
         }
-        .divider {
-            height: 1px;
-            background-color: #e0e0e0;
-            margin: 20px 0;
+
+        .status.success {
+            color: var(--accent-strong);
+            background: var(--accent-soft);
+            border: 1px solid rgba(15, 118, 110, 0.16);
         }
-        .info-section {
-            background-color: #f8f9fa;
-            padding: 12px;
-            border-radius: 4px;
+
+        .status.error {
+            color: var(--danger);
+            background: var(--danger-soft);
+            border: 1px solid rgba(180, 35, 24, 0.14);
+        }
+
+        .summary {
+            margin-top: 18px;
+            border-radius: 18px;
+            padding: 16px;
+            background: rgba(255, 255, 255, 0.74);
+            border: 1px solid rgba(30, 35, 48, 0.08);
+        }
+
+        .summary-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .summary-title {
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 6px 10px;
             font-size: 12px;
-            color: #666;
+            font-weight: 650;
         }
-        .info-section strong {
-            color: #333;
+
+        .chip.connected {
+            color: var(--accent-strong);
+            background: var(--accent-soft);
         }
-        .info-section a {
-            color: #1967d2;
-            text-decoration: none;
+
+        .chip.waiting {
+            color: var(--warn);
+            background: var(--warn-soft);
         }
-        .info-section a:hover {
-            text-decoration: underline;
+
+        .chip.warning {
+            color: var(--danger);
+            background: var(--danger-soft);
         }
-        .privacy-note {
-            margin-top: 10px;
-            padding-top: 10px;
-            border-top: 1px dashed #d7dce2;
-            line-height: 1.5;
+
+        .facts {
+            display: grid;
+            gap: 10px;
         }
-        .hidden {
-            display: none;
+
+        .fact {
+            display: grid;
+            gap: 4px;
+        }
+
+        .fact-label {
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        .fact-value {
+            font-size: 13px;
+            line-height: 1.45;
+            color: var(--ink);
+            word-break: break-word;
+        }
+
+        .browser-hint {
+            margin-top: 14px;
+            font-size: 12px;
+            line-height: 1.55;
+            color: var(--muted);
+        }
+
+        .busy .shell {
+            opacity: 0.94;
         }
     </style>
 </head>
 <body>
-    <h1>🔄 Flow2API Token Updater</h1>
+    <div class="shell">
+        <div class="eyebrow">Flow2API Auto Sync</div>
+        <h1>只填一个 Base URL</h1>
+        <p class="subtitle">
+            扩展会自动读取已登录的 Flow2API 控制台配置，并把当前浏览器 profile 的 Google Labs 登录态同步过去。
+        </p>
 
-    <div class="form-group">
-        <label>当前模式</label>
-        <div class="info-section">
-            一个浏览器 profile 只配一套连接。<br>
-            在每个要用的 Zen / Firefox profile 里各填一次下面两个值即可。
+        <div class="field">
+            <label for="baseUrl">Flow2API Base URL</label>
+            <input
+                type="text"
+                id="baseUrl"
+                placeholder="https://your-flow2api.example.com"
+                autocomplete="off"
+                spellcheck="false">
+            <div class="hint">
+                只填控制台地址。若当前浏览器已登录该站点，扩展会自动读取插件连接配置，不再要求你手动复制接口地址或 Token。
+            </div>
         </div>
-    </div>
 
-    <div class="form-group">
-        <label for="apiUrl">连接接口</label>
-        <input type="text" id="apiUrl" placeholder="http://127.0.0.1:8000/api/plugin/update-token">
-        <div class="hint">从Flow2API管理后台的"插件连接配置"中复制</div>
-    </div>
-
-    <div class="form-group">
-        <label for="connectionToken">连接Token</label>
-        <input type="text" id="connectionToken" placeholder="输入连接Token">
-        <div class="hint">从Flow2API管理后台的"插件连接配置"中复制</div>
-    </div>
-
-    <div class="form-group">
-        <label>默认行为</label>
-        <div class="hint">
-            保存后会读取当前浏览器 profile 的默认 Google Labs 登录态，并每 60 分钟自动同步一次。<br>
-            如果同一个 Google 账号登录在多个 profile，只建议选一个 profile 启用定时同步。
+        <div class="actions">
+            <button class="btn-primary" id="connectBtn">连接并同步</button>
+            <button class="btn-secondary" id="syncBtn">立即同步</button>
         </div>
-    </div>
 
-    <div class="button-group">
-        <button class="btn-primary" id="saveBtn">保存并启用</button>
-        <button class="btn-secondary" id="testBtn">立即同步</button>
-    </div>
+        <button class="btn-plain" id="consoleBtn">打开 Flow2API 控制台</button>
+        <button class="btn-plain" id="logsBtn">查看日志</button>
 
-    <div class="button-group">
-        <button class="btn-secondary" id="logsBtn" style="width: 100%;">📋 查看日志</button>
-    </div>
+        <div class="status" id="status"></div>
 
-    <div class="status" id="status"></div>
+        <div class="summary">
+            <div class="summary-head">
+                <div class="summary-title">当前状态</div>
+                <div class="chip waiting" id="connectionChip">等待连接</div>
+            </div>
 
-    <div class="divider"></div>
+            <div class="facts">
+                <div class="fact">
+                    <div class="fact-label">Flow2API</div>
+                    <div class="fact-value" id="summaryBaseUrl">未设置</div>
+                </div>
+                <div class="fact">
+                    <div class="fact-label">当前账号</div>
+                    <div class="fact-value" id="summaryEmail">等待识别</div>
+                </div>
+                <div class="fact">
+                    <div class="fact-label">Token 到期</div>
+                    <div class="fact-value" id="summaryExpires">未获取</div>
+                </div>
+                <div class="fact">
+                    <div class="fact-label">上次同步</div>
+                    <div class="fact-value" id="summaryLastSync">未获取</div>
+                </div>
+                <div class="fact">
+                    <div class="fact-label">同步反馈</div>
+                    <div class="fact-value" id="summaryMessage">填入 Base URL 后，扩展会自动读取控制台配置并同步。</div>
+                </div>
+            </div>
 
-    <div class="info-section">
-        <strong>📌 当前环境：</strong><br>
-        <span id="environmentHint">正在检测浏览器和可用会话...</span><br><br>
-        <strong>📎 说明：</strong><br>
-        <span id="profileHint">
-            浏览器 profile 彼此完全隔离。若你有多个 Zen / Firefox profile，需要在每个 profile 里分别安装并填写这两个连接字段。
-        </span>
-        <div class="privacy-note">
-            <strong>🔐 数据说明：</strong><br>
-            连接 Token 和连接接口仅保存在当前浏览器 profile 本地。保存配置后，扩展会按你的设置访问
-            `labs.google` 并把提取到的登录态发送到你指定的接口。<br>
-            <a href="privacy.html" target="_blank" rel="noreferrer">查看隐私政策</a>
+            <div class="browser-hint" id="browserHint">
+                当前浏览器会监听 Google Labs 登录态变化，并自动同步。
+            </div>
         </div>
     </div>
 

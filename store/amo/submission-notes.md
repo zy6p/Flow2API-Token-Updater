@@ -12,10 +12,11 @@ This extension is designed for users who run their own Flow2API service.
 
 - It reads cookies from `https://labs.google/` only.
 - It looks for the `__Secure-next-auth.session-token` cookie only.
-- The extracted token is sent only to the API URL configured by the user in the popup UI.
+- After the user enters a Flow2API Base URL and grants site access, the extension may read the local admin session state from the user's already logged-in Flow2API console in the same browser in order to auto-discover the plugin connection token.
+- The extracted token is sent only to the user's own Flow2API endpoint at `/api/plugin/update-token`.
 - The extension does not send analytics, ads, telemetry, or tracking data to the developer.
 - Sensitive `connectionToken` values are stored in `storage.local` only.
-- Non-sensitive settings such as account name, API URL, refresh interval, and cookie store mapping are stored in `storage.sync`.
+- Non-sensitive settings such as the Flow2API Base URL and local sync state are stored in `storage.local` only.
 
 ## Build and sign
 

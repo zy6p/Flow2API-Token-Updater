@@ -6,6 +6,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GECKO_BINARY="${GECKO_BINARY:-firefox}"
 GECKO_PROFILE="${GECKO_PROFILE:-}"
 HEADLESS="${HEADLESS:-0}"
+STAGE_DIR="$(mktemp -d)"
+
+cleanup() {
+  rm -rf "${STAGE_DIR}"
+}
+trap cleanup EXIT
 
 if ! command -v "${GECKO_BINARY}" >/dev/null 2>&1 && [[ ! -x "${GECKO_BINARY}" ]]; then
   echo "Cannot find Gecko browser binary: ${GECKO_BINARY}" >&2
@@ -14,9 +20,11 @@ if ! command -v "${GECKO_BINARY}" >/dev/null 2>&1 && [[ ! -x "${GECKO_BINARY}" ]
   exit 1
 fi
 
+"${ROOT_DIR}/scripts/prepare_gecko_source.sh" "${STAGE_DIR}"
+
 cmd=(
   npx --yes web-ext run
-  --source-dir "${ROOT_DIR}"
+  --source-dir "${STAGE_DIR}"
   --firefox "${GECKO_BINARY}"
   --no-input
   --no-reload
@@ -34,6 +42,7 @@ if [[ "${HEADLESS}" == "1" ]]; then
 fi
 
 printf 'Running temporary Gecko add-on with %s\n' "${GECKO_BINARY}"
+printf 'Using staged Gecko source %s\n' "${STAGE_DIR}"
 if [[ -n "${GECKO_PROFILE}" ]]; then
   printf 'Using profile %s\n' "${GECKO_PROFILE}"
 fi
