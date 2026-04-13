@@ -5,7 +5,8 @@ const state = {
     suggestedBaseUrl: '',
     lastSync: null,
     browserInfo: null,
-    hasConnection: false
+    hasConnection: false,
+    configSource: 'none'
 };
 
 let statusTimer = null;
@@ -16,7 +17,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 function bindEvents() {
-    document.getElementById('connectBtn').addEventListener('click', connectFlow2Api);
+    document.getElementById('connectBtn').addEventListener('click', runPrimaryAction);
     document.getElementById('consoleBtn').addEventListener('click', openConsole);
 }
 
@@ -38,6 +39,7 @@ async function loadSetupData() {
         state.browserInfo = response.browserInfo || null;
         state.suggestedBaseUrl = response.suggestedBaseUrl || '';
         state.hasConnection = Boolean(response.hasConnection || response.settings?.connectionToken);
+        state.configSource = response.settings?.configSource || 'none';
 
         render(true);
 
@@ -45,10 +47,12 @@ async function loadSetupData() {
             showStatus('已读取当前配置', 'success');
         } else if (state.lastSync?.status === 'error') {
             showStatus(state.lastSync.message || '上次同步失败，需要处理', 'error');
+        } else if (state.hasConnection && state.configSource === 'sync') {
+            showStatus('已沿用同浏览器里的 Flow2API 设置。现在只需要同步这个 Profile。', 'info');
         } else if (state.lastSync?.status === 'waiting_session' || state.hasConnection) {
-            showStatus(state.lastSync?.message || 'Flow2API 已连接，等待自动同步', 'info');
+            showStatus(state.lastSync?.message || 'Flow2API 已接入，等待当前 Profile 的 Google Labs 登录态。', 'info');
         } else if (state.baseUrl) {
-            showStatus('已准备好连接 Flow2API', 'info');
+            showStatus('准备把这个 Profile 接到 Flow2API', 'info');
         } else {
             hideStatusSoon();
         }
@@ -68,6 +72,7 @@ function render(allowPrefill = false) {
     }
 
     renderSummary();
+    renderPrimaryAction();
 }
 
 function renderSummary() {
@@ -76,26 +81,26 @@ function renderSummary() {
         : '当前浏览器';
 
     document.getElementById('browserHint').textContent =
-        `${browserName} 会监听 Google Labs 登录态变化，并自动把当前 profile 的 session 同步到 Flow2API。`;
+        `${browserName} 里的每个 Profile 都有各自的 Google 登录态。扩展只处理当前这个 Profile，Flow2API 地址会尽量自动沿用。`;
 
     const hasBaseUrl = Boolean(state.baseUrl);
     const hasConnection = Boolean(state.hasConnection);
     const lastSync = state.lastSync;
 
-    let stateLabel = '等待连接';
+    let stateLabel = '未接入';
     let stateClass = 'waiting';
 
     if (hasConnection && lastSync?.status === 'error') {
         stateLabel = '需要处理';
         stateClass = 'warning';
     } else if (hasConnection) {
-        stateLabel = '已连接';
+        stateLabel = '已接入';
         stateClass = 'connected';
     } else if (hasBaseUrl && lastSync?.status === 'error') {
         stateLabel = '需要处理';
         stateClass = 'warning';
     } else if (hasBaseUrl) {
-        stateLabel = '等待连接';
+        stateLabel = '准备接入';
         stateClass = 'waiting';
     }
 
@@ -114,9 +119,34 @@ function renderSummary() {
     document.getElementById('summaryLastSync').textContent = formatDateTime(lastSync?.syncedAt);
     document.getElementById('summaryMessage').textContent = lastSync?.message
         || (hasConnection
-            ? 'Flow2API 已连接。检测到 Google Labs 登录态后会自动同步。'
-            : '填入 Base URL 后，扩展会自动读取控制台配置并同步。');
+            ? 'Flow2API 已接入。检测到当前 Profile 的 Google Labs 登录态后会自动同步。'
+            : '第一次使用时确认一次 Flow2API 地址，扩展会自动接管后续同步。');
 
+}
+
+function renderPrimaryAction() {
+    const button = document.getElementById('connectBtn');
+    button.textContent = getPrimaryActionLabel();
+}
+
+function getPrimaryActionLabel() {
+    if (!state.hasConnection) {
+        return '连接到 Flow2API';
+    }
+
+    if (state.lastSync?.status === 'success') {
+        return '重新同步这个 Profile';
+    }
+
+    return '同步这个 Profile';
+}
+
+async function runPrimaryAction() {
+    if (state.hasConnection) {
+        return syncCurrentProfile();
+    }
+
+    return connectFlow2Api();
 }
 
 async function connectFlow2Api() {
@@ -125,7 +155,7 @@ async function connectFlow2Api() {
         const originPattern = toOriginPattern(baseUrl);
 
         setBusy(true);
-        showStatus('正在连接 Flow2API 控制台...', 'info');
+        showStatus('正在连接 Flow2API...', 'info');
 
         await ensureHostPermission(originPattern);
 
@@ -154,6 +184,7 @@ async function connectFlow2Api() {
         state.baseUrl = normalizeBaseUrl(baseUrl);
         state.lastSync = response.lastSync || state.lastSync;
         state.hasConnection = true;
+        state.configSource = 'local';
         render();
 
         const statusType = response.lastSync?.status === 'error'
@@ -161,7 +192,65 @@ async function connectFlow2Api() {
             : (response.synced === false ? 'info' : 'success');
 
         showStatus(
-            response.message || 'Flow2API 已连接',
+            response.message || 'Flow2API 已接入',
+            statusType
+        );
+    } catch (error) {
+        showStatus(error.message, 'error');
+    } finally {
+        setBusy(false);
+    }
+}
+
+async function syncCurrentProfile() {
+    try {
+        const baseUrl = collectBaseUrl();
+        const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+        const originPattern = toOriginPattern(normalizedBaseUrl);
+
+        setBusy(true);
+        showStatus('正在检查当前 Profile 的 Google Labs 登录态...', 'info');
+
+        await ensureHostPermission(originPattern);
+
+        let response;
+
+        if (!state.baseUrl || state.baseUrl !== normalizedBaseUrl || !state.hasConnection) {
+            response = await extensionApi.runtime.sendMessage({
+                action: 'connectBaseUrl',
+                baseUrl: normalizedBaseUrl
+            });
+        } else {
+            response = await extensionApi.runtime.sendMessage({
+                action: 'syncNow'
+            });
+        }
+
+        if (!response?.success) {
+            if (response?.lastSync) {
+                state.lastSync = response.lastSync;
+                render();
+            }
+
+            if (response?.needsLogin) {
+                showStatus(response.message || '请先登录 Flow2API 控制台', 'info');
+                return;
+            }
+
+            throw new Error(response?.error || '同步失败');
+        }
+
+        state.baseUrl = normalizedBaseUrl;
+        state.lastSync = response.lastSync || state.lastSync;
+        state.hasConnection = Boolean(response.hasConnection || state.hasConnection);
+        render();
+
+        const statusType = response.lastSync?.status === 'error'
+            ? 'error'
+            : (response.synced === false ? 'info' : 'success');
+
+        showStatus(
+            response.message || '当前 Profile 已同步',
             statusType
         );
     } catch (error) {
@@ -175,7 +264,7 @@ async function openConsole() {
     try {
         const baseUrl = collectBaseUrl(true);
         if (!baseUrl) {
-            throw new Error('请先填写 Flow2API Base URL');
+            throw new Error('请先填写 Flow2API 地址');
         }
 
         await extensionApi.runtime.sendMessage({
@@ -201,7 +290,7 @@ async function ensureHostPermission(originPattern) {
     });
 
     if (!approved) {
-        throw new Error('需要授权访问这个 Flow2API 域名，扩展才能自动读取控制台配置');
+        throw new Error('需要允许扩展访问这个 Flow2API 地址，才能自动读取控制台设置');
     }
 }
 
@@ -215,7 +304,7 @@ function collectBaseUrl(allowEmpty = false) {
             return '';
         }
 
-        throw new Error('请填写 Flow2API Base URL');
+        throw new Error('请填写 Flow2API 地址');
     }
 
     return normalizeBaseUrl(raw);
@@ -224,7 +313,7 @@ function collectBaseUrl(allowEmpty = false) {
 function normalizeBaseUrl(raw) {
     let value = typeof raw === 'string' ? raw.trim() : '';
     if (!value) {
-        throw new Error('请填写 Flow2API Base URL');
+        throw new Error('请填写 Flow2API 地址');
     }
 
     if (!/^[a-z]+:\/\//i.test(value)) {
@@ -235,11 +324,11 @@ function normalizeBaseUrl(raw) {
     try {
         parsed = new URL(value);
     } catch (error) {
-        throw new Error('Base URL 不是合法地址');
+        throw new Error('Flow2API 地址不是合法网址');
     }
 
     if (!['http:', 'https:'].includes(parsed.protocol)) {
-        throw new Error('Base URL 必须以 http:// 或 https:// 开头');
+        throw new Error('Flow2API 地址必须以 http:// 或 https:// 开头');
     }
 
     return parsed.origin;

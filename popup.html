@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Flow2API Token Updater</title>
+    <title>Flow2API</title>
     <style>
         :root {
             --ink: #1e2330;
@@ -265,27 +265,27 @@
 </head>
 <body>
     <div class="shell">
-        <div class="eyebrow">Flow2API Auto Sync</div>
-        <h1>只填一个 Base URL</h1>
+        <div class="eyebrow">Flow2API</div>
+        <h1>把这个 Profile 接到 Flow2API</h1>
         <p class="subtitle">
-            扩展会自动读取已登录的 Flow2API 控制台配置，并把当前浏览器 profile 的 Google Labs 登录态同步过去。
+            第一次使用时确认一次 Flow2API 地址。之后扩展会记住它，并自动同步当前这个 Profile 的 Google Labs 登录态。
         </p>
 
         <div class="field">
-            <label for="baseUrl">Flow2API Base URL</label>
+            <label for="baseUrl">Flow2API 地址</label>
             <input
                 type="text"
                 id="baseUrl"
-                placeholder="https://your-flow2api.example.com"
+                placeholder="https://flow2api.example.com"
                 autocomplete="off"
                 spellcheck="false">
             <div class="hint">
-                只填控制台地址。若当前浏览器已登录该站点，扩展会自动读取插件连接配置，不再要求你手动复制接口地址或 Token。
+                填你的 Flow2API 控制台地址即可，例如 <code>https://flow2api.example.com</code>。扩展会自动读取已登录控制台里的连接设置。
             </div>
         </div>
 
         <div class="actions">
-            <button class="btn-primary" id="connectBtn">连接 Flow2API</button>
+            <button class="btn-primary" id="connectBtn">连接到 Flow2API</button>
         </div>
 
         <button class="btn-plain" id="consoleBtn">前往 Flow2API 控制台</button>
@@ -295,34 +295,34 @@
         <div class="summary">
             <div class="summary-head">
                 <div class="summary-title">当前状态</div>
-                <div class="chip waiting" id="connectionChip">等待连接</div>
+                <div class="chip waiting" id="connectionChip">未接入</div>
             </div>
 
             <div class="facts">
                 <div class="fact">
-                    <div class="fact-label">Flow2API</div>
+                    <div class="fact-label">Flow2API 服务</div>
                     <div class="fact-value" id="summaryBaseUrl">未设置</div>
                 </div>
                 <div class="fact">
-                    <div class="fact-label">当前账号</div>
+                    <div class="fact-label">当前 Profile 账号</div>
                     <div class="fact-value" id="summaryEmail">等待识别</div>
                 </div>
                 <div class="fact">
-                    <div class="fact-label">Token 到期</div>
+                    <div class="fact-label">登录到期</div>
                     <div class="fact-value" id="summaryExpires">未获取</div>
                 </div>
                 <div class="fact">
-                    <div class="fact-label">上次同步</div>
+                    <div class="fact-label">最近同步</div>
                     <div class="fact-value" id="summaryLastSync">未获取</div>
                 </div>
                 <div class="fact">
-                    <div class="fact-label">同步反馈</div>
-                    <div class="fact-value" id="summaryMessage">填入 Base URL 后，扩展会自动读取控制台配置并同步。</div>
+                    <div class="fact-label">当前说明</div>
+                    <div class="fact-value" id="summaryMessage">第一次使用时确认一次 Flow2API 地址，扩展会自动接管后续同步。</div>
                 </div>
             </div>
 
             <div class="browser-hint" id="browserHint">
-                当前浏览器会监听 Google Labs 登录态变化，并自动同步。
+                当前浏览器会监听 Google Labs 登录态变化，并自动同步这个 Profile。
             </div>
         </div>
     </div>

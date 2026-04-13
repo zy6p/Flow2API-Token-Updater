@@ -3,12 +3,12 @@
     "other"
   ],
   "summary": {
-    "en-US": "Syncs the current Google Labs session to a Flow2API server after the user provides only the Flow2API base URL.",
-    "zh-CN": "用户只需填写一个 Flow2API Base URL，扩展就会把当前 Google Labs 登录态同步到对应服务。"
+    "en-US": "Connects the current browser profile to Flow2API and syncs that profile's Google Labs session.",
+    "zh-CN": "把当前浏览器 Profile 接到 Flow2API，并同步这个 Profile 的 Google Labs 登录态。"
   },
   "description": {
-    "en-US": "Flow2API Token Updater reads the Google Labs session cookie from labs.google, auto-discovers the plugin connection token from an already logged-in Flow2API console on the same browser after the user authorizes a Base URL, and syncs the session to that Flow2API server. It supports Chromium browsers and Firefox-based browsers such as Firefox and Zen.",
-    "zh-CN": "Flow2API Token Updater 会从 labs.google 读取当前登录态；当用户填写 Base URL 并授权访问该域名后，扩展会在同一浏览器内自动读取已登录的 Flow2API 控制台配置，并把登录态同步到该 Flow2API 服务。它支持 Chromium 以及 Firefox / Zen 等 Firefox 系浏览器。"
+    "en-US": "Flow2API Token Updater reads the Google Labs session cookie from labs.google, auto-discovers the plugin connection token from an already logged-in Flow2API console on the same browser after the user authorizes a Flow2API address, and syncs the current browser profile's session to that Flow2API server. When browser sync storage is available, the Flow2API address and connection token can be reused by the user's other browser profiles under the same browser account. It supports Chromium browsers and Firefox-based browsers such as Firefox and Zen.",
+    "zh-CN": "Flow2API Token Updater 会从 labs.google 读取当前浏览器 Profile 的登录态；当用户填写 Flow2API 地址并授权访问该域名后，扩展会在同一浏览器内自动读取已登录的 Flow2API 控制台配置，并把当前 Profile 的登录态同步到该 Flow2API 服务。如果浏览器同步存储可用，Flow2API 地址和连接 Token 还可以沿用到同一浏览器账号下的其他 Profile。它支持 Chromium 以及 Firefox / Zen 等 Firefox 系浏览器。"
   },
   "homepage": {
     "en-US": "https://banana.rematrixed.com/",
@@ -16,6 +16,6 @@
   },
   "version": {
     "license": "all-rights-reserved",
-    "approval_notes": "This extension accesses cookies for https://labs.google/ to read the __Secure-next-auth.session-token value. After the user enters a Flow2API base URL and grants access to that site, the extension may read the local admin session state from the user's already logged-in Flow2API console in the same browser in order to auto-discover the plugin connection token. The extracted Google Labs session token is then sent only to the user's own Flow2API endpoint at /api/plugin/update-token. No analytics, advertising, telemetry, or third-party tracking endpoints are included. The Base URL, discovered connection token, and local logs are stored only in browser local storage per profile. Privacy policy: https://banana.rematrixed.com/privacy"
+    "approval_notes": "This extension accesses cookies for https://labs.google/ to read the __Secure-next-auth.session-token value. After the user enters a Flow2API address and grants access to that site, the extension may read the local admin session state from the user's already logged-in Flow2API console in the same browser in order to auto-discover the plugin connection token. The extracted Google Labs session token is then sent only to the user's own Flow2API endpoint at /api/plugin/update-token. No analytics, advertising, telemetry, or third-party tracking endpoints are included. Local per-profile sync state and logs are stored in browser local storage. When browser sync storage is available, the Flow2API address and discovered connection token may also be stored in browser sync storage so the user's other browser profiles under the same browser account can reuse the Flow2API connection setup. Privacy policy: https://banana.rematrixed.com/privacy"
   }
 }

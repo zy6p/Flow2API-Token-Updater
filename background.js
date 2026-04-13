@@ -3,8 +3,10 @@ const extensionApi = globalThis.browser ?? globalThis.chrome;
 const LABS_URL = 'https://labs.google/fx/vi/tools/flow';
 const LABS_COOKIE_URL = 'https://labs.google/';
 const SESSION_COOKIE_NAME = '__Secure-next-auth.session-token';
-const WAITING_FOR_LABS_MESSAGE = 'Flow2API 已连接，等待 Google Labs 登录态。你登录 Labs 后扩展会自动同步。';
+const WAITING_FOR_LABS_MESSAGE = 'Flow2API 已接入。登录当前 Profile 的 Google Labs 后，扩展会自动完成同步。';
 const ACCOUNT_SECRETS_KEY = 'accountSecrets';
+const SHARED_BASE_URL_KEY = 'sharedBaseUrl';
+const SHARED_CONNECTION_TOKEN_KEY = 'sharedConnectionToken';
 const SYNC_ALARM_NAME = 'flow2apiSafetySync';
 const DEFAULT_SAFETY_SYNC_MINUTES = 360;
 const EARLY_REFRESH_MS = 30 * 60 * 1000;
@@ -214,7 +216,7 @@ async function connectBaseUrl(rawBaseUrl) {
         lastSync: syncResult.lastSync || (await loadSettings()).lastSync,
         message: syncResult.lastSync?.status === 'waiting_session'
             ? WAITING_FOR_LABS_MESSAGE
-            : `Flow2API 已连接，但首次同步失败：${syncResult.error || '未知错误'}`
+            : `Flow2API 已接入，但当前这个 Profile 的首次同步失败：${syncResult.error || '未知错误'}`
     };
 }
 
@@ -268,7 +270,7 @@ async function performSync({
     if (!effectiveBaseUrl) {
         return {
             success: false,
-            error: '请先填写 Flow2API Base URL'
+            error: '请先填写 Flow2API 地址'
         };
     }
 
@@ -304,7 +306,7 @@ async function performSync({
         });
 
         if (!sessionCookie?.value) {
-            throw new Error('未找到 Google Labs 登录态，请先在当前浏览器 profile 里登录 Labs');
+            throw new Error('未找到当前 Profile 的 Google Labs 登录态，请先在这个 Profile 里登录 Labs');
         }
 
         let derivedAccount = null;
@@ -430,6 +432,7 @@ async function hydrateConnectionFromConsole(baseUrl, {
         baseUrl: normalized.origin,
         connectionToken
     });
+    await saveSharedConfig(normalized.origin, connectionToken);
 
     await Logger.success('Flow2API connection discovered from console', {
         baseUrl: normalized.origin
@@ -1094,16 +1097,36 @@ async function hasOriginPermission(origin) {
 }
 
 async function loadSettings() {
-    const stored = await extensionApi.storage.local.get([
-        'baseUrl',
-        'connectionToken',
-        'lastSync'
+    const [stored, synced] = await Promise.all([
+        extensionApi.storage.local.get([
+            'baseUrl',
+            'connectionToken',
+            'lastSync'
+        ]),
+        safeGetSyncStorage([
+            SHARED_BASE_URL_KEY,
+            SHARED_CONNECTION_TOKEN_KEY
+        ])
     ]);
 
+    const localBaseUrl = typeof stored.baseUrl === 'string' ? stored.baseUrl.trim() : '';
+    const localConnectionToken = typeof stored.connectionToken === 'string'
+        ? stored.connectionToken.trim()
+        : '';
+    const sharedBaseUrl = typeof synced[SHARED_BASE_URL_KEY] === 'string'
+        ? synced[SHARED_BASE_URL_KEY].trim()
+        : '';
+    const sharedConnectionToken = typeof synced[SHARED_CONNECTION_TOKEN_KEY] === 'string'
+        ? synced[SHARED_CONNECTION_TOKEN_KEY].trim()
+        : '';
+
     return {
-        baseUrl: typeof stored.baseUrl === 'string' ? stored.baseUrl.trim() : '',
-        connectionToken: typeof stored.connectionToken === 'string' ? stored.connectionToken.trim() : '',
-        lastSync: stored.lastSync && typeof stored.lastSync === 'object' ? stored.lastSync : null
+        baseUrl: localBaseUrl || sharedBaseUrl,
+        connectionToken: localConnectionToken || sharedConnectionToken,
+        lastSync: stored.lastSync && typeof stored.lastSync === 'object' ? stored.lastSync : null,
+        configSource: localBaseUrl || localConnectionToken
+            ? 'local'
+            : ((sharedBaseUrl || sharedConnectionToken) ? 'sync' : 'none')
     };
 }
 
@@ -1159,6 +1182,7 @@ async function migrateLegacyConfig() {
         baseUrl,
         connectionToken: legacyConnectionToken
     });
+    await saveSharedConfig(baseUrl, legacyConnectionToken);
 
     await Logger.info('Legacy config migrated to single baseUrl model', {
         baseUrl
@@ -1172,6 +1196,19 @@ async function safeGetSyncStorage(keys) {
         return await extensionApi.storage.sync.get(keys);
     } catch (error) {
         return {};
+    }
+}
+
+async function saveSharedConfig(baseUrl, connectionToken) {
+    try {
+        await extensionApi.storage.sync.set({
+            [SHARED_BASE_URL_KEY]: baseUrl,
+            [SHARED_CONNECTION_TOKEN_KEY]: connectionToken
+        });
+    } catch (error) {
+        await Logger.info('Shared config sync skipped', {
+            error: error.message
+        });
     }
 }
 
@@ -1218,7 +1255,7 @@ function normalizeBaseUrl(rawValue) {
     const input = typeof rawValue === 'string' ? rawValue.trim() : '';
 
     if (!input) {
-        throw new Error('请填写 Flow2API Base URL');
+        throw new Error('请填写 Flow2API 地址');
     }
 
     let candidate = input;
@@ -1230,11 +1267,11 @@ function normalizeBaseUrl(rawValue) {
     try {
         parsed = new URL(candidate);
     } catch (error) {
-        throw new Error('Base URL 不是合法地址');
+        throw new Error('Flow2API 地址不是合法网址');
     }
 
     if (!['http:', 'https:'].includes(parsed.protocol)) {
-        throw new Error('Base URL 必须以 http:// 或 https:// 开头');
+        throw new Error('Flow2API 地址必须以 http:// 或 https:// 开头');
     }
 
     return {
@@ -1257,7 +1294,8 @@ function isMissingLabsSessionError(errorOrMessage) {
         : errorOrMessage?.message;
 
     return typeof message === 'string'
-        && message.includes('未找到 Google Labs 登录态');
+        && message.includes('Google Labs 登录态')
+        && message.includes('未找到');
 }
 
 function createWaitingSessionState(previousLastSync, reason) {
