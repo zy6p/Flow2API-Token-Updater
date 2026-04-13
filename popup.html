@@ -6,18 +6,23 @@
     <title>Flow2API</title>
     <style>
         :root {
-            --ink: #1e2330;
-            --muted: #5c6474;
-            --line: rgba(26, 35, 50, 0.12);
-            --card: rgba(255, 255, 255, 0.88);
-            --accent: #0f766e;
-            --accent-strong: #115e59;
-            --accent-soft: rgba(15, 118, 110, 0.12);
-            --warn: #b45309;
-            --warn-soft: rgba(180, 83, 9, 0.12);
-            --danger: #b42318;
-            --danger-soft: rgba(180, 35, 24, 0.12);
-            --surface: linear-gradient(180deg, #f3efe5 0%, #eef3f4 46%, #f7f8fb 100%);
+            --ink: #121722;
+            --muted: #667085;
+            --line: rgba(16, 24, 40, 0.08);
+            --card: rgba(255, 255, 255, 0.84);
+            --panel: rgba(255, 255, 255, 0.72);
+            --accent: #0a84ff;
+            --accent-strong: #0066d6;
+            --accent-soft: rgba(10, 132, 255, 0.12);
+            --accent-glow: rgba(10, 132, 255, 0.22);
+            --warn: #b54708;
+            --warn-soft: rgba(245, 158, 11, 0.16);
+            --danger: #d92d20;
+            --danger-soft: rgba(217, 45, 32, 0.12);
+            --surface:
+                radial-gradient(circle at 15% 12%, rgba(10, 132, 255, 0.18), transparent 34%),
+                radial-gradient(circle at 85% 18%, rgba(255, 255, 255, 0.9), transparent 24%),
+                linear-gradient(180deg, #eef4ff 0%, #f7f8fb 40%, #f2f4f7 100%);
         }
 
         * {
@@ -25,63 +30,92 @@
         }
 
         body {
-            width: 368px;
+            width: 382px;
             margin: 0;
-            padding: 18px;
-            font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+            padding: 14px;
+            font-family: "SF Pro Rounded", "SF Pro Text", "Avenir Next", "IBM Plex Sans", sans-serif;
             color: var(--ink);
-            background:
-                radial-gradient(circle at top right, rgba(15, 118, 110, 0.16), transparent 34%),
-                radial-gradient(circle at bottom left, rgba(180, 83, 9, 0.08), transparent 28%),
-                var(--surface);
+            background: var(--surface);
         }
 
         .shell {
-            border: 1px solid rgba(255, 255, 255, 0.75);
+            border: 1px solid rgba(255, 255, 255, 0.7);
             background: var(--card);
-            backdrop-filter: blur(18px);
-            border-radius: 20px;
+            backdrop-filter: blur(26px);
+            border-radius: 28px;
             padding: 18px;
-            box-shadow: 0 16px 40px rgba(27, 39, 51, 0.14);
+            box-shadow:
+                0 18px 40px rgba(16, 24, 40, 0.12),
+                inset 0 1px 0 rgba(255, 255, 255, 0.45);
+        }
+
+        .hero {
+            padding: 2px 2px 8px;
+        }
+
+        .hero-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
         }
 
         .eyebrow {
             display: inline-flex;
             align-items: center;
-            gap: 8px;
-            padding: 6px 10px;
+            gap: 7px;
+            padding: 7px 11px;
             border-radius: 999px;
-            background: rgba(255, 255, 255, 0.72);
-            border: 1px solid rgba(15, 118, 110, 0.12);
+            background: rgba(255, 255, 255, 0.78);
+            border: 1px solid rgba(10, 132, 255, 0.12);
             color: var(--muted);
             font-size: 11px;
             letter-spacing: 0.08em;
             text-transform: uppercase;
+            font-weight: 700;
+        }
+
+        .eyebrow::before {
+            content: "";
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: linear-gradient(180deg, #5fb2ff 0%, var(--accent) 100%);
+            box-shadow: 0 0 0 4px rgba(10, 132, 255, 0.12);
         }
 
         h1 {
-            margin: 14px 0 8px;
-            font-size: 24px;
-            line-height: 1.1;
-            font-weight: 680;
+            margin: 16px 0 8px;
+            font-size: 28px;
+            line-height: 1.06;
+            letter-spacing: -0.03em;
+            font-weight: 760;
         }
 
         .subtitle {
-            margin: 0 0 18px;
-            font-size: 13px;
+            margin: 0;
+            font-size: 14px;
             line-height: 1.55;
             color: var(--muted);
         }
 
-        .field {
-            margin-bottom: 14px;
+        .card {
+            margin-top: 16px;
+            border-radius: 24px;
+            background: var(--panel);
+            border: 1px solid rgba(255, 255, 255, 0.7);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+        }
+
+        .card.input-card {
+            padding: 16px;
         }
 
         label {
             display: block;
-            margin-bottom: 8px;
-            font-size: 12px;
-            font-weight: 650;
+            margin-bottom: 9px;
+            font-size: 11px;
+            font-weight: 720;
             letter-spacing: 0.04em;
             text-transform: uppercase;
             color: var(--muted);
@@ -89,43 +123,40 @@
 
         input[type="text"] {
             width: 100%;
-            border: 1px solid rgba(30, 35, 48, 0.12);
-            border-radius: 14px;
-            padding: 13px 14px;
-            font-size: 14px;
+            border: 1px solid rgba(16, 24, 40, 0.08);
+            border-radius: 18px;
+            padding: 15px 16px;
+            font-size: 15px;
             font-family: inherit;
             color: var(--ink);
-            background: rgba(255, 255, 255, 0.9);
+            background: rgba(255, 255, 255, 0.95);
             transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
         }
 
         input[type="text"]:focus {
             outline: none;
-            border-color: rgba(15, 118, 110, 0.35);
-            box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
+            border-color: rgba(10, 132, 255, 0.32);
+            box-shadow: 0 0 0 5px rgba(10, 132, 255, 0.12);
             transform: translateY(-1px);
         }
 
         .hint {
-            margin-top: 8px;
+            margin-top: 10px;
             font-size: 12px;
-            line-height: 1.5;
+            line-height: 1.55;
             color: var(--muted);
         }
 
         .actions {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 10px;
             margin-top: 14px;
         }
 
         button {
             border: none;
-            border-radius: 14px;
-            padding: 12px 14px;
-            font-size: 14px;
-            font-weight: 650;
+            border-radius: 18px;
+            padding: 15px 16px;
+            font-size: 15px;
+            font-weight: 700;
             font-family: inherit;
             cursor: pointer;
             transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
@@ -141,39 +172,51 @@
         }
 
         .btn-primary {
+            width: 100%;
             color: white;
-            background: linear-gradient(135deg, var(--accent) 0%, #147d74 100%);
-            box-shadow: 0 10px 22px rgba(15, 118, 110, 0.26);
+            background: linear-gradient(180deg, #2b98ff 0%, var(--accent-strong) 100%);
+            box-shadow:
+                0 14px 28px var(--accent-glow),
+                inset 0 1px 0 rgba(255, 255, 255, 0.28);
         }
 
         .btn-plain {
             width: 100%;
             margin-top: 10px;
+            color: var(--ink);
+            background: rgba(255, 255, 255, 0.7);
+            border: 1px solid rgba(16, 24, 40, 0.06);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
+        }
+
+        .action-note {
+            margin-top: 10px;
+            font-size: 12px;
+            line-height: 1.55;
+            text-align: center;
             color: var(--muted);
-            background: transparent;
-            border: 1px dashed rgba(30, 35, 48, 0.12);
         }
 
         .status {
             display: none;
             margin-top: 14px;
-            padding: 12px 14px;
-            border-radius: 14px;
+            padding: 13px 14px;
+            border-radius: 18px;
             font-size: 13px;
             line-height: 1.5;
             white-space: pre-line;
         }
 
         .status.info {
-            color: #0f4c81;
-            background: rgba(15, 118, 110, 0.08);
-            border: 1px solid rgba(15, 118, 110, 0.14);
+            color: #165ea6;
+            background: rgba(10, 132, 255, 0.08);
+            border: 1px solid rgba(10, 132, 255, 0.12);
         }
 
         .status.success {
-            color: var(--accent-strong);
-            background: var(--accent-soft);
-            border: 1px solid rgba(15, 118, 110, 0.16);
+            color: #0c6b4f;
+            background: rgba(16, 185, 129, 0.12);
+            border: 1px solid rgba(16, 185, 129, 0.14);
         }
 
         .status.error {
@@ -182,34 +225,44 @@
             border: 1px solid rgba(180, 35, 24, 0.14);
         }
 
-        .summary {
+        .snapshot {
             margin-top: 18px;
-            border-radius: 18px;
             padding: 16px;
-            background: rgba(255, 255, 255, 0.74);
-            border: 1px solid rgba(30, 35, 48, 0.08);
         }
 
-        .summary-head {
+        .snapshot-head {
             display: flex;
             align-items: center;
             justify-content: space-between;
             gap: 12px;
-            margin-bottom: 14px;
+            margin-bottom: 16px;
         }
 
-        .summary-title {
-            font-size: 14px;
-            font-weight: 700;
+        .snapshot-label {
+            font-size: 11px;
+            font-weight: 720;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        .snapshot-value {
+            max-width: 210px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            text-align: right;
+            font-size: 13px;
+            font-weight: 640;
         }
 
         .chip {
             display: inline-flex;
             align-items: center;
             border-radius: 999px;
-            padding: 6px 10px;
+            padding: 7px 11px;
             font-size: 12px;
-            font-weight: 650;
+            font-weight: 720;
         }
 
         .chip.connected {
@@ -227,52 +280,79 @@
             background: var(--danger-soft);
         }
 
-        .facts {
+        .stats {
             display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 10px;
         }
 
-        .fact {
+        .stat {
+            min-height: 84px;
+            border-radius: 20px;
+            padding: 14px 12px;
+            background: rgba(255, 255, 255, 0.76);
+            border: 1px solid rgba(16, 24, 40, 0.05);
             display: grid;
-            gap: 4px;
+            align-content: space-between;
+            gap: 10px;
         }
 
-        .fact-label {
+        .stat-label {
             font-size: 11px;
             letter-spacing: 0.08em;
             text-transform: uppercase;
             color: var(--muted);
+            font-weight: 680;
         }
 
-        .fact-value {
+        .stat-value {
             font-size: 13px;
             line-height: 1.45;
             color: var(--ink);
             word-break: break-word;
+            font-weight: 650;
+        }
+
+        .snapshot-note {
+            margin-top: 14px;
+            font-size: 13px;
+            line-height: 1.55;
+            color: var(--ink);
         }
 
         .browser-hint {
-            margin-top: 14px;
+            margin-top: 12px;
             font-size: 12px;
             line-height: 1.55;
             color: var(--muted);
         }
 
         .busy .shell {
-            opacity: 0.94;
+            opacity: 0.96;
+        }
+
+        .busy .btn-primary {
+            box-shadow:
+                0 10px 18px rgba(10, 132, 255, 0.12),
+                inset 0 1px 0 rgba(255, 255, 255, 0.2);
         }
     </style>
 </head>
 <body>
     <div class="shell">
-        <div class="eyebrow">Flow2API</div>
-        <h1>把这个 Profile 接到 Flow2API</h1>
-        <p class="subtitle">
-            第一次使用时确认一次 Flow2API 地址。之后扩展会记住它，并自动同步当前这个 Profile 的 Google Labs 登录态。
-        </p>
+        <div class="hero">
+            <div class="hero-head">
+                <div class="eyebrow">Flow2API</div>
+                <div class="chip waiting" id="connectionChip">未接入</div>
+            </div>
+            <h1 id="heroTitle">先接入 Flow2API</h1>
+            <p class="subtitle" id="heroText">
+                确认一次你的 Flow2API 控制台地址。扩展会接管后续同步，不再让你反复设置。
+            </p>
+        </div>
 
-        <div class="field">
-            <label for="baseUrl">Flow2API 地址</label>
+        <div class="card input-card">
+            <label for="baseUrl">Flow2API 控制台</label>
             <input
                 type="text"
                 id="baseUrl"
@@ -280,49 +360,47 @@
                 autocomplete="off"
                 spellcheck="false">
             <div class="hint">
-                填你的 Flow2API 控制台地址即可，例如 <code>https://flow2api.example.com</code>。扩展会自动读取已登录控制台里的连接设置。
+                只填站点地址，例如 <code>https://flow2api.example.com</code>。扩展会自动读取已登录控制台里的连接设置。
             </div>
         </div>
-
-        <div class="actions">
-            <button class="btn-primary" id="connectBtn">连接到 Flow2API</button>
-        </div>
-
-        <button class="btn-plain" id="consoleBtn">前往 Flow2API 控制台</button>
 
         <div class="status" id="status"></div>
 
-        <div class="summary">
-            <div class="summary-head">
-                <div class="summary-title">当前状态</div>
-                <div class="chip waiting" id="connectionChip">未接入</div>
+        <div class="actions">
+            <button class="btn-primary" id="connectBtn">接入 Flow2API</button>
+            <div class="action-note" id="actionNote">
+                只做一件事：让这个 Profile 开始为 Flow2API 自动同步。
+            </div>
+            <button class="btn-plain" id="consoleBtn">打开 Flow2API 控制台</button>
+        </div>
+
+        <div class="card snapshot">
+            <div class="snapshot-head">
+                <div class="snapshot-label">接入目标</div>
+                <div class="snapshot-value" id="summaryBaseUrl">未设置</div>
             </div>
 
-            <div class="facts">
-                <div class="fact">
-                    <div class="fact-label">Flow2API 服务</div>
-                    <div class="fact-value" id="summaryBaseUrl">未设置</div>
+            <div class="stats">
+                <div class="stat">
+                    <div class="stat-label">账号</div>
+                    <div class="stat-value" id="summaryEmail">等待识别</div>
                 </div>
-                <div class="fact">
-                    <div class="fact-label">当前 Profile 账号</div>
-                    <div class="fact-value" id="summaryEmail">等待识别</div>
+                <div class="stat">
+                    <div class="stat-label">到期</div>
+                    <div class="stat-value" id="summaryExpires">未获取</div>
                 </div>
-                <div class="fact">
-                    <div class="fact-label">登录到期</div>
-                    <div class="fact-value" id="summaryExpires">未获取</div>
+                <div class="stat">
+                    <div class="stat-label">上次同步</div>
+                    <div class="stat-value" id="summaryLastSync">未获取</div>
                 </div>
-                <div class="fact">
-                    <div class="fact-label">最近同步</div>
-                    <div class="fact-value" id="summaryLastSync">未获取</div>
-                </div>
-                <div class="fact">
-                    <div class="fact-label">当前说明</div>
-                    <div class="fact-value" id="summaryMessage">第一次使用时确认一次 Flow2API 地址，扩展会自动接管后续同步。</div>
-                </div>
+            </div>
+
+            <div class="snapshot-note" id="summaryMessage">
+                先把这个 Profile 接到 Flow2API，后面的登录态变化会自动跟上。
             </div>
 
             <div class="browser-hint" id="browserHint">
-                当前浏览器会监听 Google Labs 登录态变化，并自动同步这个 Profile。
+                每个 Profile 的 Google 登录态彼此独立。扩展只处理你当前打开的这个 Profile。
             </div>
         </div>
     </div>

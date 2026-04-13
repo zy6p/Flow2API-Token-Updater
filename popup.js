@@ -44,15 +44,15 @@ async function loadSetupData() {
         render(true);
 
         if (state.lastSync?.status === 'success') {
-            showStatus('已读取当前配置', 'success');
+            showStatus('这个 Profile 已经就绪。', 'success');
         } else if (state.lastSync?.status === 'error') {
-            showStatus(state.lastSync.message || '上次同步失败，需要处理', 'error');
+            showStatus(state.lastSync.message || '这次同步没有完成。', 'error');
         } else if (state.hasConnection && state.configSource === 'sync') {
             showStatus('已沿用同浏览器里的 Flow2API 设置。现在只需要同步这个 Profile。', 'info');
         } else if (state.lastSync?.status === 'waiting_session' || state.hasConnection) {
-            showStatus(state.lastSync?.message || 'Flow2API 已接入，等待当前 Profile 的 Google Labs 登录态。', 'info');
+            showStatus(state.lastSync?.message || 'Flow2API 已接入，等你在这个 Profile 登录 Labs。', 'info');
         } else if (state.baseUrl) {
-            showStatus('准备把这个 Profile 接到 Flow2API', 'info');
+            showStatus('确认这个地址后，就可以把当前 Profile 接到 Flow2API。', 'info');
         } else {
             hideStatusSoon();
         }
@@ -72,7 +72,7 @@ function render(allowPrefill = false) {
     }
 
     renderSummary();
-    renderPrimaryAction();
+    renderExperience();
 }
 
 function renderSummary() {
@@ -81,7 +81,7 @@ function renderSummary() {
         : '当前浏览器';
 
     document.getElementById('browserHint').textContent =
-        `${browserName} 里的每个 Profile 都有各自的 Google 登录态。扩展只处理当前这个 Profile，Flow2API 地址会尽量自动沿用。`;
+        `${browserName} 里的每个 Profile 都有自己的 Google 登录态。扩展只处理当前这个 Profile，Flow2API 地址会尽量自动沿用。`;
 
     const hasBaseUrl = Boolean(state.baseUrl);
     const hasConnection = Boolean(state.hasConnection);
@@ -119,26 +119,69 @@ function renderSummary() {
     document.getElementById('summaryLastSync').textContent = formatDateTime(lastSync?.syncedAt);
     document.getElementById('summaryMessage').textContent = lastSync?.message
         || (hasConnection
-            ? 'Flow2API 已接入。检测到当前 Profile 的 Google Labs 登录态后会自动同步。'
-            : '第一次使用时确认一次 Flow2API 地址，扩展会自动接管后续同步。');
+            ? 'Flow2API 已接入。这个 Profile 的 Google Labs 登录态有变化时，扩展会自动同步。'
+            : '第一次只要确认一次 Flow2API 地址，后续同步会自动完成。');
 
 }
 
-function renderPrimaryAction() {
-    const button = document.getElementById('connectBtn');
-    button.textContent = getPrimaryActionLabel();
+function renderExperience() {
+    const ui = getUiModel();
+
+    document.getElementById('heroTitle').textContent = ui.title;
+    document.getElementById('heroText').textContent = ui.text;
+    document.getElementById('connectBtn').textContent = ui.actionLabel;
+    document.getElementById('actionNote').textContent = ui.actionNote;
 }
 
-function getPrimaryActionLabel() {
-    if (!state.hasConnection) {
-        return '连接到 Flow2API';
+function getUiModel() {
+    const hasBaseUrl = Boolean(state.baseUrl || state.suggestedBaseUrl);
+    const hasConnection = Boolean(state.hasConnection);
+    const lastSync = state.lastSync;
+
+    if (!hasConnection) {
+        return {
+            title: hasBaseUrl ? '确认后立刻接入' : '先接入 Flow2API',
+            text: hasBaseUrl
+                ? '扩展会读取已登录控制台里的设置，然后开始接管这个 Profile 的同步。'
+                : '先告诉扩展你的 Flow2API 控制台在哪，后续同步就不需要你反复操作。',
+            actionLabel: '接入 Flow2API',
+            actionNote: '第一次只做一件事：把这个 Profile 接到你的 Flow2API。'
+        };
     }
 
-    if (state.lastSync?.status === 'success') {
-        return '重新同步这个 Profile';
+    if (lastSync?.status === 'error') {
+        return {
+            title: '这次同步没有完成',
+            text: 'Flow2API 已经接入好了。现在只需要重新检查这个 Profile 的 Google Labs 登录态。',
+            actionLabel: '再试一次',
+            actionNote: '点一下就会重新检查当前这个 Profile，而不会改动别的 Profile。'
+        };
     }
 
-    return '同步这个 Profile';
+    if (lastSync?.status === 'success') {
+        return {
+            title: '这个 Profile 已经就绪',
+            text: 'Google Labs 登录态有变化时，扩展会自动同步到 Flow2API。你通常不需要手动操作。',
+            actionLabel: '立即重新同步',
+            actionNote: '只有在你刚切换 Labs 账号，或者想立刻刷新时，才需要点这一下。'
+        };
+    }
+
+    if (state.configSource === 'sync') {
+        return {
+            title: '这个 Profile 还没开始同步',
+            text: '我已经沿用了同浏览器里的 Flow2API 设置。现在只需要读取这个 Profile 自己的 Labs 登录态。',
+            actionLabel: '同步这个 Profile',
+            actionNote: '不会影响其他 Profile，只会处理你现在打开的这个。'
+        };
+    }
+
+    return {
+        title: '等你在这个 Profile 登录 Labs',
+        text: 'Flow2API 已经接入。你在这个 Profile 登录 Google Labs 后，扩展会自动完成同步。',
+        actionLabel: '同步这个 Profile',
+        actionNote: '如果你刚刚登录完成，点一下就会立刻检查，不用等后台自己发现。'
+    };
 }
 
 async function runPrimaryAction() {
@@ -192,7 +235,7 @@ async function connectFlow2Api() {
             : (response.synced === false ? 'info' : 'success');
 
         showStatus(
-            response.message || 'Flow2API 已接入',
+            response.message || 'Flow2API 已接入。',
             statusType
         );
     } catch (error) {
@@ -250,7 +293,7 @@ async function syncCurrentProfile() {
             : (response.synced === false ? 'info' : 'success');
 
         showStatus(
-            response.message || '当前 Profile 已同步',
+            response.message || '这个 Profile 已同步。',
             statusType
         );
     } catch (error) {
@@ -340,8 +383,16 @@ function toOriginPattern(baseUrl) {
 
 function setBusy(isBusy) {
     document.getElementById('connectBtn').disabled = isBusy;
-    document.getElementById('consoleBtn').disabled = isBusy;
+    document.getElementById('consoleBtn').disabled = isBusy || !hasConsoleTarget();
     document.body.classList.toggle('busy', isBusy);
+}
+
+function hasConsoleTarget() {
+    return Boolean(
+        document.getElementById('baseUrl').value.trim()
+        || state.baseUrl
+        || state.suggestedBaseUrl
+    );
 }
 
 function showStatus(message, type) {
