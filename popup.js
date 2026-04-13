@@ -16,11 +16,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 function bindEvents() {
     document.getElementById('connectBtn').addEventListener('click', connectAndSync);
-    document.getElementById('syncBtn').addEventListener('click', syncNow);
     document.getElementById('consoleBtn').addEventListener('click', openConsole);
-    document.getElementById('logsBtn').addEventListener('click', () => {
-        window.location.href = 'logs.html';
-    });
 }
 
 async function loadSetupData() {
@@ -65,7 +61,6 @@ function render(allowPrefill = false) {
         input.value = nextValue;
     }
 
-    document.getElementById('syncBtn').disabled = !(state.baseUrl && state.lastSync);
     renderSummary();
 }
 
@@ -109,7 +104,6 @@ function renderSummary() {
     document.getElementById('summaryLastSync').textContent = formatDateTime(lastSync?.syncedAt);
     document.getElementById('summaryMessage').textContent = lastSync?.message || '填入 Base URL 后，扩展会自动读取控制台配置并同步。';
 
-    document.getElementById('syncBtn').disabled = !hasBaseUrl;
 }
 
 async function connectAndSync() {
@@ -151,74 +145,6 @@ async function connectAndSync() {
         showStatus(response.message || '已连接并同步成功', 'success');
     } catch (error) {
         showStatus(error.message, 'error');
-    } finally {
-        setBusy(false);
-    }
-}
-
-async function syncNow() {
-    try {
-        const baseUrl = collectBaseUrl();
-        const originPattern = toOriginPattern(baseUrl);
-
-        setBusy(true);
-        showStatus('正在同步当前浏览器的 Google Labs 登录态...', 'info');
-
-        await ensureHostPermission(originPattern);
-
-        if (!state.baseUrl || state.baseUrl !== normalizeBaseUrl(baseUrl)) {
-            const connectResponse = await extensionApi.runtime.sendMessage({
-                action: 'connectBaseUrl',
-                baseUrl
-            });
-
-            if (!connectResponse?.success) {
-                state.baseUrl = normalizeBaseUrl(baseUrl);
-
-                if (connectResponse?.lastSync) {
-                    state.lastSync = connectResponse.lastSync;
-                }
-
-                render();
-
-                if (connectResponse?.needsLogin) {
-                    showStatus(connectResponse.message || '请先登录 Flow2API 控制台', 'info');
-                    return;
-                }
-
-                throw new Error(connectResponse?.error || '连接失败');
-            }
-
-            state.baseUrl = normalizeBaseUrl(baseUrl);
-            state.lastSync = connectResponse.lastSync || state.lastSync;
-            render();
-            showStatus(connectResponse.message || '同步成功', 'success');
-            return;
-        }
-
-        const response = await extensionApi.runtime.sendMessage({
-            action: 'syncNow'
-        });
-
-        if (!response?.success) {
-            if (response?.lastSync) {
-                state.lastSync = response.lastSync;
-                render();
-            }
-
-            if (response?.needsLogin) {
-                showStatus(response.message || '请先登录 Flow2API 控制台', 'info');
-                return;
-            }
-
-            throw new Error(response?.error || '同步失败');
-        }
-
-        state.lastSync = response.lastSync || state.lastSync;
-        render();
-        showStatus(response.message || '同步成功', 'success');
-    } catch (error) {
-        showStatus(`同步失败：${error.message}`, 'error');
     } finally {
         setBusy(false);
     }
@@ -304,17 +230,8 @@ function toOriginPattern(baseUrl) {
 
 function setBusy(isBusy) {
     document.getElementById('connectBtn').disabled = isBusy;
-    document.getElementById('syncBtn').disabled = isBusy || !collectSyncEligibility();
     document.getElementById('consoleBtn').disabled = isBusy;
     document.body.classList.toggle('busy', isBusy);
-}
-
-function collectSyncEligibility() {
-    return Boolean(
-        document.getElementById('baseUrl').value.trim()
-        || state.baseUrl
-        || state.suggestedBaseUrl
-    );
 }
 
 function showStatus(message, type) {
