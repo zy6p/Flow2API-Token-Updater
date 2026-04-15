@@ -8,6 +8,7 @@
 - 每个 profile 只需要填写一个 `Base URL`
 - 如果当前浏览器已经登录同域名的 Flow2API 控制台，扩展会自动读取插件连接 Token
 - 扩展会监听当前 profile 的 Google Labs 登录态变化，并自动同步到 Flow2API
+- 如果浏览器里已经存在 Google Labs / Flow2API 的登录态，即使对应页面没有打开，扩展也会在后台静默探测并自动同步
 
 > 注意：浏览器 **profile 之间是完全隔离** 的。  
 > 如果你有多个 Zen / Firefox profile，需要在每个 profile 里分别安装并填写一次连接配置。  
@@ -75,11 +76,13 @@
 
 2.  **首次连接**
     点击 `连接并同步`。
-    - 如果控制台已登录：扩展会自动完成连接并立刻同步。
-    - 如果控制台未登录：扩展会自动打开 Flow2API 控制台，登录后再回到扩展点一次即可。
+    - 如果浏览器里已经保留了 Flow2API 控制台登录态：扩展会在后台自动读取连接配置并立刻同步。
+    - 如果当前 profile 已经具备 Google Labs 登录态，但你没开 Labs 页面：扩展会后台静默打开一次 Labs 页面完成会话发现，然后自动关闭。
+    - 只有在 Flow2API 控制台确实未登录时，扩展才会把控制台打开到前台，提示你手动登录。
 
 3.  **自动同步**
-    连接成功后，扩展会监听 `labs.google` 的 session cookie 变化自动同步，并保留后台兜底检查；用户不需要再理解“账号配置 / 会话来源 / 刷新时间”这类概念。
+    连接成功后，扩展会监听 `labs.google` 的 session cookie 变化自动同步，并保留浏览器启动检查与后台兜底检查；必要时会静默唤醒一次 Labs 页面来刷新当前 profile 的会话识别。
+    如果只是 Labs session 过期、但浏览器登录仍有效，扩展会优先后台自动恢复；如果恢复失败，会继续自动重试，并在通知里带上最近识别到的账号与 Flow2API 站点，方便你判断是哪个 profile。
 
 4.  **获取配置信息**
     如果您不知道 Flow2API 控制台地址，请先打开自己的 Flow2API 管理后台，然后把它的站点根地址填到扩展里即可。
@@ -91,6 +94,7 @@
 
 1.  只在真正持有 Google Labs 登录态的 profile 里安装和配置扩展。
 2.  每个要用的 profile 里各填一次 `Base URL`。
+    如果浏览器同步存储可用，Flow2API 的 `Base URL` 和插件连接 Token 也可能自动沿用到同浏览器账号下的其他 profile；但每个 profile 的 Google Labs 登录态仍然完全独立。
 3.  如果同一个 Google 账号同时登录在多个 profile，只选一个 profile 启用定时同步。
 4.  其余 profile 可以不装扩展，或者装了但不保存配置。
 5.  不要让多个 profile 长期对同一套 Flow2API 账号池反复覆盖同一个 Google 账号，否则通常是谁最后同步谁覆盖。
@@ -99,9 +103,10 @@
 
 - 扩展会读取 `labs.google` 的登录 Cookie，并提取 `__Secure-next-auth.session-token`
 - 当用户填写 `Base URL` 且同浏览器已登录 Flow2API 控制台时，扩展会临时读取控制台的本地登录状态，以自动获取插件连接 Token
+- 当浏览器里存在现有登录态但页面未打开时，扩展可能会后台静默打开 `labs.google` 或 `Flow2API /manage` 页面，以发现当前 profile 可用的会话，然后自动关闭临时标签页
 - 提取到的登录态只会发送到用户自己填写的 `Base URL` 对应的 Flow2API 接口
-- 自动发现到的连接 Token 始终仅保存在当前浏览器本地，不写入浏览器同步存储
-- `Base URL` 等连接配置也仅保存在当前浏览器 profile 本地
+- 当前 profile 的同步状态和运行日志仅保存在当前浏览器 profile 本地
+- 如果浏览器同步存储可用，`Base URL` 和插件连接 Token 可能会写入浏览器同步存储，供同浏览器账号下的其他 profile 沿用
 - 更多说明见 [privacy.html](privacy.html)
 
 ## 五、 上架前建议

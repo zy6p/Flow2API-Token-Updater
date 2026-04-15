@@ -3,15 +3,18 @@ const extensionApi = globalThis.browser ?? globalThis.chrome;
 const LABS_URL = 'https://labs.google/fx/vi/tools/flow';
 const LABS_COOKIE_URL = 'https://labs.google/';
 const SESSION_COOKIE_NAME = '__Secure-next-auth.session-token';
-const WAITING_FOR_LABS_MESSAGE = 'Flow2API 已接入。登录当前 Profile 的 Google Labs 后，扩展会自动完成同步。';
+const WAITING_FOR_LABS_MESSAGE = 'Flow2API 已接入。当前 Profile 的 Google Labs 会话暂时不可用，扩展会后台自动重试；如果浏览器登录本身也失效了，再手动登录一次即可。';
 const ACCOUNT_SECRETS_KEY = 'accountSecrets';
 const SHARED_BASE_URL_KEY = 'sharedBaseUrl';
 const SHARED_CONNECTION_TOKEN_KEY = 'sharedConnectionToken';
 const SYNC_ALARM_NAME = 'flow2apiSafetySync';
 const DEFAULT_SAFETY_SYNC_MINUTES = 360;
+const WAITING_RETRY_MINUTES = 5;
 const EARLY_REFRESH_MS = 30 * 60 * 1000;
 const TAB_LOAD_TIMEOUT_MS = 20000;
-const SESSION_WAIT_MS = 3000;
+const SESSION_DISCOVERY_TIMEOUT_MS = 10000;
+const SESSION_DISCOVERY_INTERVAL_MS = 500;
+const CONSOLE_DISCOVERY_TIMEOUT_MS = 5000;
 
 const runtimeState = {
     activeSync: null
@@ -68,10 +71,11 @@ if (extensionApi.runtime.onStartup) {
         await refreshSafetyAlarm();
 
         const settings = await loadSettings();
-        if (settings.baseUrl && settings.connectionToken) {
+        if (settings.baseUrl) {
             await syncCurrentSession({
                 reason: 'startup',
-                allowLabsWakeup: false,
+                allowLabsWakeup: true,
+                allowConsoleWakeup: true,
                 notifyOnError: false
             });
         }
@@ -103,6 +107,7 @@ if (extensionApi.cookies?.onChanged) {
         void syncCurrentSession({
             reason: 'cookie_changed',
             allowLabsWakeup: false,
+            allowConsoleWakeup: false,
             notifyOnError: true
         });
     });
@@ -115,7 +120,8 @@ extensionApi.alarms.onAlarm.addListener(async (alarm) => {
 
     await syncCurrentSession({
         reason: 'scheduled_check',
-        allowLabsWakeup: false,
+        allowLabsWakeup: true,
+        allowConsoleWakeup: true,
         notifyOnError: true
     });
 });
@@ -130,6 +136,7 @@ async function handleMessage(request = {}) {
             return syncCurrentSession({
                 reason: 'manual_sync',
                 allowLabsWakeup: true,
+                allowConsoleWakeup: true,
                 notifyOnError: false
             });
         case 'openConsole':
@@ -157,7 +164,7 @@ async function getSetupData() {
     const suggestedBaseUrl = await getSuggestedBaseUrl(settings.baseUrl);
 
     if (settings.baseUrl && !settings.connectionToken && await hasOriginPermission(settings.baseUrl)) {
-        await hydrateConnectionFromConsole(settings.baseUrl, { openIfMissing: false, activateOnNeedsLogin: false });
+        await hydrateConnectionFromConsole(settings.baseUrl, { openIfMissing: true, activateOnNeedsLogin: false });
     }
 
     const hydratedSettings = await loadSettings();
@@ -195,6 +202,7 @@ async function connectBaseUrl(rawBaseUrl) {
     const syncResult = await syncCurrentSession({
         reason: 'manual_connect',
         allowLabsWakeup: true,
+        allowConsoleWakeup: true,
         notifyOnError: false,
         adminToken: connection.adminToken,
         baseUrl: normalized.origin
@@ -234,6 +242,7 @@ async function openConsole(rawBaseUrl) {
 async function syncCurrentSession({
     reason,
     allowLabsWakeup,
+    allowConsoleWakeup,
     notifyOnError,
     adminToken = null,
     baseUrl = null
@@ -245,6 +254,7 @@ async function syncCurrentSession({
     runtimeState.activeSync = performSync({
         reason,
         allowLabsWakeup,
+        allowConsoleWakeup,
         notifyOnError,
         adminToken,
         baseUrl
@@ -258,6 +268,7 @@ async function syncCurrentSession({
 async function performSync({
     reason,
     allowLabsWakeup,
+    allowConsoleWakeup,
     notifyOnError,
     adminToken,
     baseUrl
@@ -276,7 +287,7 @@ async function performSync({
 
     if (!settings.connectionToken) {
         const hydrated = await hydrateConnectionFromConsole(effectiveBaseUrl, {
-            openIfMissing: reason === 'manual_connect',
+            openIfMissing: allowConsoleWakeup,
             activateOnNeedsLogin: reason === 'manual_connect'
         });
 
@@ -386,6 +397,21 @@ async function performSync({
             error: error.message
         });
 
+        if (waitingForLabs) {
+            await refreshSafetyAlarm();
+        }
+
+        if (waitingForLabs && notifyOnError) {
+            await createNotification(
+                'Flow2API 正在等待当前 Profile 的 Labs 会话',
+                buildProfileHintMessage({
+                    baseUrl: effectiveBaseUrl,
+                    email: settings.lastSync?.email || null,
+                    fallback: '扩展已后台尝试恢复；如果仍未恢复，会继续自动重试。'
+                })
+            );
+        }
+
         if (notifyOnError && !waitingForLabs) {
             await createNotification('Flow2API 同步失败', error.message);
         }
@@ -467,23 +493,54 @@ async function getAdminSessionFromConsole(baseUrl, {
 
     const targetTab = candidates[0] || null;
 
-    if (targetTab && activateOnNeedsLogin) {
-        await extensionApi.tabs.update(targetTab.id, { active: true });
+    if (openIfMissing) {
+        const { tab, created } = await findOrCreateTab(`${baseUrl}/manage`, {
+            active: false,
+            focusIfExisting: false
+        });
 
-        if (typeof targetTab.windowId === 'number' && extensionApi.windows?.update) {
-            await extensionApi.windows.update(targetTab.windowId, { focused: true });
+        try {
+            await waitForTabLoad(tab.id);
+        } catch (error) {
+            if (created && !activateOnNeedsLogin) {
+                await closeTabIfNeeded(tab.id);
+            }
+
+            throw error;
+        }
+
+        const probe = await waitForAdminSessionInTab(tab.id);
+        if (probe?.adminToken) {
+            if (created) {
+                await closeTabIfNeeded(tab.id);
+            }
+
+            return {
+                success: true,
+                adminToken: probe.adminToken,
+                tabId: tab.id,
+                pageKind: probe.pageKind
+            };
+        }
+
+        if (!activateOnNeedsLogin && created) {
+            await closeTabIfNeeded(tab.id);
+        }
+
+        if (activateOnNeedsLogin) {
+            await focusTab(tab);
+
+            return {
+                success: false,
+                needsLogin: true,
+                openedConsole: true,
+                message: '已打开 Flow2API 控制台，请先登录后台，然后再点一次“连接并同步”'
+            };
         }
     }
 
-    if (!targetTab && openIfMissing) {
-        const tab = await focusOrCreateTab(`${baseUrl}/manage`);
-
-        return {
-            success: false,
-            needsLogin: true,
-            openedConsole: true,
-            message: '已打开 Flow2API 控制台，请先登录后台，然后再点一次“连接并同步”'
-        };
+    if (targetTab && activateOnNeedsLogin) {
+        await focusTab(targetTab);
     }
 
     return {
@@ -632,8 +689,7 @@ async function getSessionCookie({ loadIfMissing }) {
 
         try {
             await waitForTabLoad(tab.id);
-            await sleep(SESSION_WAIT_MS);
-            cookie = await findSessionCookie();
+            cookie = await waitForSessionCookieDiscovery();
         } finally {
             await closeTabIfNeeded(tab.id);
         }
@@ -642,7 +698,7 @@ async function getSessionCookie({ loadIfMissing }) {
     return cookie;
 }
 
-async function findSessionCookie() {
+async function findSessionCookie({ logIfMissing = true } = {}) {
     const storeIds = await collectCandidateCookieStoreIds();
     const candidates = [];
     const seen = new Set();
@@ -667,7 +723,7 @@ async function findSessionCookie() {
 
     const preferred = pickPreferredSessionCookie(candidates);
 
-    if (!preferred) {
+    if (!preferred && logIfMissing) {
         await Logger.info('Google Labs session cookie not found', {
             storeIds,
             checkedVariants: buildSessionCookieQueries(storeIds).length
@@ -745,6 +801,8 @@ async function refreshSafetyAlarm(cookie = null) {
         const desired = sessionCookie.expirationDate * 1000 - EARLY_REFRESH_MS;
         const minimum = now + 15 * 60 * 1000;
         when = Math.max(minimum, desired);
+    } else {
+        when = now + WAITING_RETRY_MINUTES * 60 * 1000;
     }
 
     extensionApi.alarms.create(SYNC_ALARM_NAME, { when });
@@ -764,8 +822,27 @@ async function handleLabsSessionRemoved(changeInfo) {
         return;
     }
 
-    const lastSync = createWaitingSessionState(settings.lastSync, 'cookie_removed');
-    await extensionApi.storage.local.set({ lastSync });
+    const recovery = await syncCurrentSession({
+        reason: 'cookie_removed_recovery',
+        allowLabsWakeup: true,
+        allowConsoleWakeup: false,
+        notifyOnError: false
+    });
+
+    if (recovery.success) {
+        return;
+    }
+
+    if (recovery.lastSync?.status === 'waiting_session') {
+        await createNotification(
+            'Flow2API 正在等待当前 Profile 的 Labs 会话',
+            buildProfileHintMessage({
+                baseUrl: settings.baseUrl,
+                email: recovery.lastSync.email || settings.lastSync?.email || null,
+                fallback: '扩展已后台尝试恢复，会继续自动重试。'
+            })
+        );
+    }
 }
 
 async function collectCandidateCookieStoreIds() {
@@ -837,6 +914,23 @@ async function safeGetAllCookies(details) {
     } catch (error) {
         return [];
     }
+}
+
+async function waitForSessionCookieDiscovery(timeoutMs = SESSION_DISCOVERY_TIMEOUT_MS) {
+    return waitForValue(async () => findSessionCookie({ logIfMissing: false }), {
+        timeoutMs,
+        intervalMs: SESSION_DISCOVERY_INTERVAL_MS
+    });
+}
+
+async function waitForAdminSessionInTab(tabId, timeoutMs = CONSOLE_DISCOVERY_TIMEOUT_MS) {
+    return waitForValue(async () => {
+        const probe = await probeFlow2ApiTab(tabId);
+        return probe?.adminToken ? probe : null;
+    }, {
+        timeoutMs,
+        intervalMs: SESSION_DISCOVERY_INTERVAL_MS
+    });
 }
 
 function serializeCookieIdentity(cookie) {
@@ -1032,21 +1126,49 @@ async function executeInTab(tabId, func) {
     throw new Error('当前浏览器不支持页面探测脚本');
 }
 
-async function focusOrCreateTab(url) {
+async function findOrCreateTab(url, {
+    active,
+    focusIfExisting
+}) {
     const tabs = await extensionApi.tabs.query({});
     const existing = tabs.find((tab) => tab.url === url) || null;
 
     if (existing) {
-        await extensionApi.tabs.update(existing.id, { active: true });
-
-        if (typeof existing.windowId === 'number' && extensionApi.windows?.update) {
-            await extensionApi.windows.update(existing.windowId, { focused: true });
+        if (active && focusIfExisting) {
+            await focusTab(existing);
         }
 
-        return existing;
+        return {
+            tab: existing,
+            created: false
+        };
     }
 
-    return extensionApi.tabs.create({ url, active: true });
+    return {
+        tab: await extensionApi.tabs.create({ url, active }),
+        created: true
+    };
+}
+
+async function focusTab(tab) {
+    if (!tab?.id) {
+        return;
+    }
+
+    await extensionApi.tabs.update(tab.id, { active: true });
+
+    if (typeof tab.windowId === 'number' && extensionApi.windows?.update) {
+        await extensionApi.windows.update(tab.windowId, { focused: true });
+    }
+}
+
+async function focusOrCreateTab(url) {
+    const { tab } = await findOrCreateTab(url, {
+        active: true,
+        focusIfExisting: true
+    });
+
+    return tab;
 }
 
 async function getSuggestedBaseUrl(savedBaseUrl) {
@@ -1327,6 +1449,47 @@ function extractEmail(message) {
 
     const match = message.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
     return match ? match[0] : null;
+}
+
+function buildProfileHintMessage({
+    baseUrl,
+    email,
+    fallback
+}) {
+    const parts = [];
+
+    if (email) {
+        parts.push(`账号：${email}`);
+    }
+
+    if (baseUrl) {
+        parts.push(`Flow2API：${baseUrl}`);
+    }
+
+    parts.push(fallback);
+    return parts.join('，');
+}
+
+async function waitForValue(check, {
+    timeoutMs,
+    intervalMs
+}) {
+    const start = Date.now();
+
+    while (Date.now() - start <= timeoutMs) {
+        const value = await check();
+        if (value) {
+            return value;
+        }
+
+        if (Date.now() - start >= timeoutMs) {
+            break;
+        }
+
+        await sleep(intervalMs);
+    }
+
+    return null;
 }
 
 async function createNotification(title, message) {

@@ -73,7 +73,7 @@
     <main>
         <div class="card">
             <h1>Flow2API Token Updater 隐私政策</h1>
-            <div class="meta">最后更新：2026-04-13</div>
+            <div class="meta">最后更新：2026-04-14</div>
 
             <p>
                 Flow2API Token Updater 是一个本地浏览器扩展，用于在用户明确配置后，
@@ -86,6 +86,7 @@
                 <li>浏览器 Cookie：仅用于读取 <code>labs.google</code> 相关会话，并查找 <code>__Secure-next-auth.session-token</code>。</li>
                 <li>用户配置：Flow2API 地址、自动发现到的连接 Token，以及本地运行所需的最小配置。</li>
                 <li>Flow2API 控制台本地登录状态：当用户填写 Flow2API 地址且授权访问该站点时，扩展会尝试读取同浏览器中该 Flow2API 控制台的本地登录状态，用于自动获取插件连接 Token。</li>
+                <li>后台临时标签页：当浏览器中已经存在可复用的登录态但相关页面未打开时，扩展可能会静默打开 <code>labs.google</code> 或用户配置的 Flow2API <code>/manage</code> 页面，以发现当前 Profile 可用的会话，并在完成后自动关闭临时标签页。</li>
                 <li>连接 Token：用于把提取到的会话数据发送到用户配置的 Flow2API 接口。</li>
                 <li>本地运行日志：仅用于帮助用户排查同步问题。</li>
             </ul>
@@ -109,7 +110,8 @@
             <h2>数据用途</h2>
             <ul>
                 <li>帮助用户将 Google Labs 登录态同步到自己的 Flow2API 服务。</li>
-                <li>在用户首次连接后，监听 Google Labs 登录态变化并自动同步；必要时做后台兜底检查。</li>
+                <li>在用户首次连接后，监听 Google Labs 登录态变化并自动同步；必要时做浏览器启动检查、后台兜底检查，以及静默会话唤醒。</li>
+                <li>当 Labs 会话过期但浏览器登录仍可复用时，扩展会自动尝试恢复；如果恢复失败，扩展可能通过浏览器通知提示最近识别到的账号和目标 Flow2API 站点，便于用户定位当前 Profile。</li>
                 <li>通过本地日志展示成功或失败状态，便于排查问题。</li>
             </ul>
 

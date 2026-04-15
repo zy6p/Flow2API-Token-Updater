@@ -78,12 +78,14 @@ function createMockResponse(status, data) {
 function createHarness({
     cookies = [],
     tabs = [],
-    syncState = {}
+    syncState = {},
+    onCreateTab = null
 } = {}) {
     const localStorageArea = createStorageArea();
     const syncStorageArea = createStorageArea(syncState);
     const apiCalls = [];
     const alarms = [];
+    const notifications = [];
     const createdTabs = [...tabs];
     let nextTabId = createdTabs.reduce((maxId, tab) => Math.max(maxId, tab.id), 0) + 1;
 
@@ -193,6 +195,10 @@ function createHarness({
                     ...details
                 };
 
+                if (typeof onCreateTab === 'function') {
+                    Object.assign(tab, await onCreateTab(details, tab) || {});
+                }
+
                 createdTabs.push(tab);
                 return tab;
             },
@@ -243,7 +249,8 @@ function createHarness({
             }
         },
         notifications: {
-            async create() {
+            async create(details) {
+                notifications.push(details);
                 return 'notification';
             }
         }
@@ -310,6 +317,7 @@ function createHarness({
         fetch,
         apiCalls,
         alarms,
+        notifications,
         localStorageArea,
         syncStorageArea,
         createdTabs
@@ -318,8 +326,24 @@ function createHarness({
 
 function loadBackground(harness) {
     const source = fs.readFileSync(BACKGROUND_PATH, 'utf8');
+    let nowMs = Date.UTC(2026, 0, 1, 0, 0, 0);
+
+    class FakeDate extends Date {
+        constructor(...args) {
+            super(...(args.length ? args : [nowMs]));
+        }
+
+        static now() {
+            return nowMs;
+        }
+    }
+
+    FakeDate.parse = Date.parse;
+    FakeDate.UTC = Date.UTC;
+
     const context = {
         console,
+        Date: FakeDate,
         URL,
         fetch: harness.fetch,
         setTimeout,
@@ -332,7 +356,9 @@ function loadBackground(harness) {
     vm.createContext(context);
     vm.runInContext(source, context, { filename: BACKGROUND_PATH });
 
-    context.sleep = async () => {};
+    context.sleep = async (ms = 0) => {
+        nowMs += ms;
+    };
 
     return context;
 }
@@ -467,11 +493,131 @@ async function testSharedConfigCanBootstrapAnotherProfile() {
     assert.equal(updateCall.body.session_token, 'shared-profile-session');
 }
 
+async function testStartupCanSilentlyHydrateAndSync() {
+    const cookies = [];
+    const labsCookie = {
+        name: SESSION_COOKIE_NAME,
+        value: 'auto-labs-session',
+        domain: 'labs.google',
+        path: '/',
+        storeId: 'default',
+        firstPartyDomain: null,
+        expirationDate: 1796054400
+    };
+
+    const harness = createHarness({
+        cookies,
+        onCreateTab(details) {
+            if (details.url === FLOW2API_MANAGE_URL) {
+                return {
+                    mockAdminToken: 'admin-token'
+                };
+            }
+
+            if (details.url === LABS_URL) {
+                cookies.push(labsCookie);
+            }
+
+            return null;
+        }
+    });
+
+    const background = loadBackground(harness);
+    await harness.localStorageArea.set({
+        baseUrl: FLOW2API_ORIGIN
+    });
+
+    await harness.browser.runtime.onStartup.emit();
+
+    const stored = harness.localStorageArea.dump();
+    assert.equal(stored.connectionToken, 'connection-token');
+    assert.equal(stored.lastSync.status, 'success');
+    assert.equal(stored.lastSync.reason, 'startup');
+
+    const updateCall = harness.apiCalls.find((call) => call.url.endsWith('/api/plugin/update-token'));
+    assert.ok(updateCall, 'startup should silently sync when existing sessions can be discovered');
+    assert.equal(updateCall.body.session_token, 'auto-labs-session');
+    assert.equal(
+        harness.createdTabs.filter((tab) => tab.url === FLOW2API_MANAGE_URL || tab.url === LABS_URL).length,
+        0,
+        'temporary discovery tabs should be closed after a successful silent sync'
+    );
+}
+
+async function testCookieRemovalTriggersSilentRecovery() {
+    const cookies = [];
+    const harness = createHarness({
+        cookies,
+        onCreateTab(details) {
+            if (details.url === LABS_URL) {
+                cookies.push({
+                    name: SESSION_COOKIE_NAME,
+                    value: 'recovered-after-expiry',
+                    domain: 'labs.google',
+                    path: '/',
+                    storeId: 'default',
+                    firstPartyDomain: null,
+                    expirationDate: 1796054400
+                });
+            }
+
+            return null;
+        }
+    });
+
+    const background = loadBackground(harness);
+    await harness.localStorageArea.set({
+        baseUrl: FLOW2API_ORIGIN,
+        connectionToken: 'connection-token',
+        lastSync: {
+            status: 'success',
+            syncedAt: '2026-04-01T00:00:00.000Z',
+            email: 'known@example.com',
+            sessionExpiresAt: '2026-04-02T00:00:00.000Z',
+            message: '同步成功'
+        }
+    });
+
+    await harness.browser.cookies.onChanged.emit({
+        removed: true,
+        cause: 'expired',
+        cookie: {
+            name: SESSION_COOKIE_NAME,
+            domain: 'labs.google'
+        }
+    });
+
+    await background.waitForValue(async () => {
+        const lastSync = harness.localStorageArea.dump().lastSync;
+        return lastSync?.reason === 'cookie_removed_recovery' ? lastSync : null;
+    }, {
+        timeoutMs: 3000,
+        intervalMs: 100
+    });
+
+    const stored = harness.localStorageArea.dump();
+    assert.equal(stored.lastSync.status, 'success');
+    assert.equal(stored.lastSync.reason, 'cookie_removed_recovery');
+    assert.equal(stored.lastSync.email, 'known@example.com');
+    assert.equal(harness.notifications.length, 0, 'successful silent recovery should not notify the user');
+    assert.equal(
+        harness.createdTabs.filter((tab) => tab.url === LABS_URL).length,
+        0,
+        'temporary Labs recovery tabs should be closed after silent recovery'
+    );
+
+    const updateCall = harness.apiCalls.find((call) => call.url.endsWith('/api/plugin/update-token'));
+    assert.ok(updateCall, 'cookie expiry recovery should push the refreshed Labs token');
+    assert.equal(updateCall.body.session_token, 'recovered-after-expiry');
+}
+
 async function main() {
     const tests = [
         ['connects Flow2API even when Labs session is missing', testConnectionSucceedsWithoutLabsSession],
         ['syncs using a Labs cookie found in a non-default Firefox store', testSyncFindsCookieOutsideDefaultStore],
-        ['bootstraps another profile from shared Flow2API config', testSharedConfigCanBootstrapAnotherProfile]
+        ['bootstraps another profile from shared Flow2API config', testSharedConfigCanBootstrapAnotherProfile],
+        ['silently hydrates Flow2API and Labs sessions during startup', testStartupCanSilentlyHydrateAndSync],
+        ['silently recovers after Labs session expiry when browser login still exists', testCookieRemovalTriggersSilentRecovery]
     ];
 
     for (const [label, test] of tests) {
