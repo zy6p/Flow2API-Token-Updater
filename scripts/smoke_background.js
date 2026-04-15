@@ -79,7 +79,9 @@ function createHarness({
     cookies = [],
     tabs = [],
     syncState = {},
-    onCreateTab = null
+    onCreateTab = null,
+    cookieStores = null,
+    fetchHandler = null
 } = {}) {
     const localStorageArea = createStorageArea();
     const syncStorageArea = createStorageArea(syncState);
@@ -101,7 +103,9 @@ function createHarness({
         cookies: {
             onChanged: createEventEmitter(),
             async getAllCookieStores() {
-                const storeIds = [...new Set(cookies.map((cookie) => cookie.storeId).filter(Boolean))];
+                const storeIds = Array.isArray(cookieStores) && cookieStores.length > 0
+                    ? cookieStores.filter(Boolean)
+                    : [...new Set(cookies.map((cookie) => cookie.storeId).filter(Boolean))];
                 return storeIds.map((id) => ({ id }));
             },
             async getAll(details = {}) {
@@ -273,6 +277,22 @@ function createHarness({
             throw new Error(`Unexpected fetch origin: ${requestUrl.origin}`);
         }
 
+        if (typeof fetchHandler === 'function') {
+            const override = await fetchHandler({
+                url,
+                options,
+                requestUrl,
+                method,
+                authHeader,
+                body,
+                createMockResponse
+            });
+
+            if (override) {
+                return override;
+            }
+        }
+
         if (requestUrl.pathname === '/api/plugin/config' && method === 'GET') {
             assert.equal(authHeader, 'Bearer admin-token', 'config GET should use admin token');
             return createMockResponse(200, {
@@ -358,6 +378,7 @@ function loadBackground(harness) {
 
     context.sleep = async (ms = 0) => {
         nowMs += ms;
+        await new Promise((resolve) => setImmediate(resolve));
     };
 
     return context;
@@ -441,6 +462,12 @@ async function testSyncFindsCookieOutsideDefaultStore() {
     assert.ok(updateCall, 'should call update-token when Labs cookie exists');
     assert.equal(updateCall.body.session_token, 'labs-session-token');
     assert.equal(updateCall.authorization, 'Bearer connection-token');
+    assert.equal(harness.alarms.length, 1, 'should schedule exactly one safety sync');
+    assert.equal(
+        new Date(harness.alarms[0].when).toISOString(),
+        '2026-01-01T12:00:00.000Z',
+        'should schedule by access-token expiry when it is earlier than the Labs cookie expiry'
+    );
     const shared = harness.syncStorageArea.dump();
     assert.equal(shared.sharedBaseUrl, FLOW2API_ORIGIN);
     assert.equal(shared.sharedConnectionToken, 'connection-token');
@@ -491,6 +518,245 @@ async function testSharedConfigCanBootstrapAnotherProfile() {
     const updateCall = harness.apiCalls.find((call) => call.url.endsWith('/api/plugin/update-token'));
     assert.ok(updateCall, 'shared config should allow syncing without reconnecting Flow2API');
     assert.equal(updateCall.body.session_token, 'shared-profile-session');
+}
+
+async function testSharedConfigFallsBackToSixHourSafetySyncWithoutAdminSession() {
+    const harness = createHarness({
+        tabs: [{
+            id: 2,
+            windowId: 1,
+            active: false,
+            status: 'complete',
+            url: LABS_URL,
+            cookieStoreId: 'firefox-container-10'
+        }],
+        cookies: [{
+            name: SESSION_COOKIE_NAME,
+            value: 'shared-profile-session-no-admin',
+            domain: 'labs.google',
+            path: '/',
+            storeId: 'firefox-container-10',
+            firstPartyDomain: null,
+            expirationDate: 1796054400
+        }],
+        syncState: {
+            sharedBaseUrl: FLOW2API_ORIGIN,
+            sharedConnectionToken: 'connection-token'
+        }
+    });
+
+    const background = loadBackground(harness);
+    const result = await background.syncCurrentSession({
+        reason: 'manual_sync',
+        allowLabsWakeup: false,
+        notifyOnError: false
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.lastSync.status, 'success');
+    assert.equal(result.lastSync.atExpires, null);
+    assert.equal(harness.alarms.length, 1);
+    assert.equal(
+        new Date(harness.alarms[0].when).toISOString(),
+        '2026-01-01T06:00:00.000Z',
+        'should cap safety sync to six hours when account expiry metadata is unavailable'
+    );
+}
+
+async function testKnownConnectionCanSilentlyWakeConsoleForExpiryMetadata() {
+    const harness = createHarness({
+        cookies: [{
+            name: SESSION_COOKIE_NAME,
+            value: 'known-connection-session',
+            domain: 'labs.google',
+            path: '/',
+            storeId: 'default',
+            firstPartyDomain: null,
+            expirationDate: 1796054400
+        }],
+        onCreateTab(details) {
+            if (details.url === FLOW2API_MANAGE_URL) {
+                return {
+                    mockAdminToken: 'admin-token'
+                };
+            }
+
+            return null;
+        }
+    });
+
+    const background = loadBackground(harness);
+    await harness.localStorageArea.set({
+        baseUrl: FLOW2API_ORIGIN,
+        connectionToken: 'connection-token'
+    });
+
+    const result = await background.syncCurrentSession({
+        reason: 'scheduled_check',
+        allowLabsWakeup: false,
+        allowConsoleWakeup: true,
+        notifyOnError: false
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.lastSync.status, 'success');
+    assert.equal(result.lastSync.email, 'user@example.com');
+    assert.equal(result.lastSync.atExpires, '2026-04-30T00:00:00.000Z');
+    assert.equal(harness.alarms.length, 1);
+    assert.equal(
+        new Date(harness.alarms[0].when).toISOString(),
+        '2026-01-01T12:00:00.000Z',
+        'should silently wake Flow2API console to recover precise expiry metadata'
+    );
+    assert.equal(
+        harness.createdTabs.filter((tab) => tab.url === FLOW2API_MANAGE_URL).length,
+        0,
+        'temporary Flow2API console tabs should be closed after metadata discovery'
+    );
+}
+
+
+async function testPreferredSessionContextCanWakeSpecificStore() {
+    const cookies = [];
+    const harness = createHarness({
+        cookies,
+        onCreateTab(details) {
+            if (details.url === LABS_URL && details.cookieStoreId === 'firefox-container-42') {
+                cookies.push({
+                    name: SESSION_COOKIE_NAME,
+                    value: 'preferred-store-session',
+                    domain: 'labs.google',
+                    path: '/',
+                    storeId: 'firefox-container-42',
+                    firstPartyDomain: null,
+                    expirationDate: 1796054400
+                });
+            }
+
+            return null;
+        }
+    });
+
+    const background = loadBackground(harness);
+    await harness.localStorageArea.set({
+        baseUrl: FLOW2API_ORIGIN,
+        connectionToken: 'connection-token',
+        sessionContext: {
+            storeId: 'firefox-container-42',
+            firstPartyDomain: null,
+            partitionTopLevelSite: null,
+            domain: 'labs.google',
+            path: '/',
+            name: SESSION_COOKIE_NAME
+        }
+    });
+
+    const result = await background.syncCurrentSession({
+        reason: 'scheduled_check',
+        allowLabsWakeup: true,
+        allowConsoleWakeup: false,
+        notifyOnError: false
+    });
+
+    assert.equal(result.success, true);
+    const updateCall = harness.apiCalls.find((call) => call.url.endsWith('/api/plugin/update-token'));
+    assert.ok(updateCall, 'preferred session store wakeup should eventually push the recovered Labs token');
+    assert.equal(updateCall.body.session_token, 'preferred-store-session');
+}
+
+async function testStaleConnectionTokenCanRecoverFromConsole() {
+    const harness = createHarness({
+        cookies: [{
+            name: SESSION_COOKIE_NAME,
+            value: 'stale-connection-session',
+            domain: 'labs.google',
+            path: '/',
+            storeId: 'default',
+            firstPartyDomain: null,
+            expirationDate: 1796054400
+        }],
+        onCreateTab(details) {
+            if (details.url === FLOW2API_MANAGE_URL) {
+                return {
+                    mockAdminToken: 'admin-token'
+                };
+            }
+
+            return null;
+        },
+        fetchHandler({ requestUrl, method, authHeader, createMockResponse }) {
+            if (requestUrl.pathname === '/api/plugin/update-token' && method === 'POST' && authHeader === 'Bearer stale-connection-token') {
+                return createMockResponse(401, {
+                    message: 'invalid connection token'
+                });
+            }
+
+            return null;
+        }
+    });
+
+    const background = loadBackground(harness);
+    await harness.localStorageArea.set({
+        baseUrl: FLOW2API_ORIGIN,
+        connectionToken: 'stale-connection-token'
+    });
+
+    const result = await background.syncCurrentSession({
+        reason: 'scheduled_check',
+        allowLabsWakeup: false,
+        allowConsoleWakeup: true,
+        notifyOnError: false
+    });
+
+    assert.equal(result.success, true);
+    const stored = harness.localStorageArea.dump();
+    assert.equal(stored.connectionToken, 'connection-token');
+
+    const updateCalls = harness.apiCalls.filter((call) => call.url.endsWith('/api/plugin/update-token'));
+    assert.equal(updateCalls.length, 2, 'stale connection tokens should be retried once after console hydration');
+    assert.equal(updateCalls[0].authorization, 'Bearer stale-connection-token');
+    assert.equal(updateCalls[1].authorization, 'Bearer connection-token');
+}
+
+
+async function testUnrelatedCookieRemovalDoesNotHijackPreferredSessionContext() {
+    const harness = createHarness();
+    const background = loadBackground(harness);
+    await harness.localStorageArea.set({
+        baseUrl: FLOW2API_ORIGIN,
+        connectionToken: 'connection-token',
+        lastSync: {
+            status: 'success',
+            syncedAt: '2026-04-01T00:00:00.000Z',
+            email: 'preferred@example.com',
+            message: '同步成功'
+        },
+        sessionContext: {
+            storeId: 'firefox-container-42',
+            firstPartyDomain: null,
+            partitionTopLevelSite: null,
+            domain: 'labs.google',
+            path: '/',
+            name: SESSION_COOKIE_NAME
+        }
+    });
+
+    await harness.browser.cookies.onChanged.emit({
+        removed: true,
+        cause: 'expired',
+        cookie: {
+            name: SESSION_COOKIE_NAME,
+            domain: 'labs.google',
+            storeId: 'firefox-container-99',
+            path: '/'
+        }
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(harness.apiCalls.filter((call) => call.url.endsWith('/api/plugin/update-token')).length, 0);
+    const stored = harness.localStorageArea.dump();
+    assert.equal(stored.lastSync.email, 'preferred@example.com');
+    assert.equal(harness.notifications.length, 0);
 }
 
 async function testStartupCanSilentlyHydrateAndSync() {
@@ -587,15 +853,17 @@ async function testCookieRemovalTriggersSilentRecovery() {
         }
     });
 
-    await background.waitForValue(async () => {
-        const lastSync = harness.localStorageArea.dump().lastSync;
-        return lastSync?.reason === 'cookie_removed_recovery' ? lastSync : null;
-    }, {
-        timeoutMs: 3000,
-        intervalMs: 100
-    });
+    let stored = harness.localStorageArea.dump();
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+        stored = harness.localStorageArea.dump();
+        if (stored.lastSync?.reason === 'cookie_removed_recovery') {
+            break;
+        }
 
-    const stored = harness.localStorageArea.dump();
+        await new Promise((resolve) => setImmediate(resolve));
+    }
+
+    stored = harness.localStorageArea.dump();
     assert.equal(stored.lastSync.status, 'success');
     assert.equal(stored.lastSync.reason, 'cookie_removed_recovery');
     assert.equal(stored.lastSync.email, 'known@example.com');
@@ -616,6 +884,11 @@ async function main() {
         ['connects Flow2API even when Labs session is missing', testConnectionSucceedsWithoutLabsSession],
         ['syncs using a Labs cookie found in a non-default Firefox store', testSyncFindsCookieOutsideDefaultStore],
         ['bootstraps another profile from shared Flow2API config', testSharedConfigCanBootstrapAnotherProfile],
+        ['caps safety sync to six hours when admin expiry metadata is unavailable', testSharedConfigFallsBackToSixHourSafetySyncWithoutAdminSession],
+        ['silently wakes Flow2API console to recover expiry metadata for known connections', testKnownConnectionCanSilentlyWakeConsoleForExpiryMetadata],
+        ['wakes the previously successful Labs cookie store before falling back to other stores', testPreferredSessionContextCanWakeSpecificStore],
+        ['recovers from a stale Flow2API connection token by rehydrating from the console', testStaleConnectionTokenCanRecoverFromConsole],
+        ['ignores Labs cookie removals that do not belong to the preferred session context', testUnrelatedCookieRemovalDoesNotHijackPreferredSessionContext],
         ['silently hydrates Flow2API and Labs sessions during startup', testStartupCanSilentlyHydrateAndSync],
         ['silently recovers after Labs session expiry when browser login still exists', testCookieRemovalTriggersSilentRecovery]
     ];
