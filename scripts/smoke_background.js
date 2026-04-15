@@ -474,6 +474,91 @@ async function testSyncFindsCookieOutsideDefaultStore() {
     assert.deepEqual(harness.syncStorageArea.dump(), {});
 }
 
+
+async function testStoreScopedSetupDataStaysSeparated() {
+    const harness = createHarness({
+        onCreateTab(details) {
+            if (details.url === FLOW2API_MANAGE_URL) {
+                return {
+                    mockAdminToken: 'admin-token'
+                };
+            }
+
+            return null;
+        },
+        cookies: [
+            {
+                name: SESSION_COOKIE_NAME,
+                value: 'store-1-session',
+                domain: 'labs.google',
+                path: '/',
+                storeId: 'firefox-container-1',
+                firstPartyDomain: null,
+                expirationDate: 1796054400
+            },
+            {
+                name: SESSION_COOKIE_NAME,
+                value: 'store-3-session',
+                domain: 'labs.google',
+                path: '/',
+                storeId: 'firefox-container-3',
+                firstPartyDomain: null,
+                expirationDate: 1796054400
+            }
+        ],
+        fetchHandler({ requestUrl, method, authHeader, body, createMockResponse }) {
+            if (requestUrl.pathname === '/api/tokens/st2at' && method === 'POST' && authHeader === 'Bearer admin-token') {
+                return createMockResponse(200, {
+                    success: true,
+                    email: `${body.st}@example.com`,
+                    expires: body.st === 'store-1-session'
+                        ? '2026-04-30T00:00:00.000Z'
+                        : '2026-05-01T00:00:00.000Z'
+                });
+            }
+
+            return null;
+        }
+    });
+
+    const background = loadBackground(harness);
+    await harness.localStorageArea.set({
+        baseUrl: FLOW2API_ORIGIN,
+        connectionToken: 'connection-token'
+    });
+
+    const store1Result = await background.handleMessage({
+        action: 'syncNow',
+        cookieStoreId: 'firefox-container-1'
+    });
+    const store3Result = await background.handleMessage({
+        action: 'syncNow',
+        cookieStoreId: 'firefox-container-3'
+    });
+
+    assert.equal(store1Result.success, true);
+    assert.equal(store3Result.success, true);
+
+    const store1Setup = await background.handleMessage({
+        action: 'getSetupData',
+        cookieStoreId: 'firefox-container-1'
+    });
+    const store3Setup = await background.handleMessage({
+        action: 'getSetupData',
+        cookieStoreId: 'firefox-container-3'
+    });
+
+    assert.equal(store1Setup.success, true);
+    assert.equal(store3Setup.success, true);
+    assert.equal(store1Setup.settings.lastSync.email, 'store-1-session@example.com');
+    assert.equal(store3Setup.settings.lastSync.email, 'store-3-session@example.com');
+    assert.equal(store1Setup.settings.lastSync.email === store3Setup.settings.lastSync.email, false);
+
+    const stored = harness.localStorageArea.dump();
+    assert.equal(stored.lastSyncByStore['firefox-container-1'].email, 'store-1-session@example.com');
+    assert.equal(stored.lastSyncByStore['firefox-container-3'].email, 'store-3-session@example.com');
+}
+
 async function testFreshProfileIgnoresLegacySharedConfig() {
     const harness = createHarness({
         syncState: {
@@ -866,6 +951,7 @@ async function main() {
     const tests = [
         ['connects Flow2API even when Labs session is missing', testConnectionSucceedsWithoutLabsSession],
         ['syncs using a Labs cookie found in a non-default Firefox store', testSyncFindsCookieOutsideDefaultStore],
+        ['keeps setup data isolated per Firefox cookie store', testStoreScopedSetupDataStaysSeparated],
         ['ignores legacy shared config when a fresh profile starts', testFreshProfileIgnoresLegacySharedConfig],
         ['caps safety sync to six hours when admin expiry metadata is unavailable', testPerProfileConfigFallsBackToSixHourSafetySyncWithoutAdminSession],
         ['silently wakes Flow2API console to recover expiry metadata for known connections', testKnownConnectionCanSilentlyWakeConsoleForExpiryMetadata],

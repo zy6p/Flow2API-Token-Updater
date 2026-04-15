@@ -4,8 +4,8 @@
 
 - Chromium 系列：Chrome、Edge
 - Firefox 系列：Firefox、Zen Browser
-- 当前版本按“一个浏览器 profile 一套配置”工作
-- 每个 profile 只需要填写一个 `Base URL`
+- 当前版本以浏览器 profile 为安装和 Flow2API 配置边界
+- 每个 profile 只需要填写一个 `Base URL`；在 Firefox / Zen 里，不同 cookie store / container 的 Labs 会话和最近同步结果会分别记住
 - 如果当前浏览器已经登录同域名的 Flow2API 控制台，扩展会自动读取插件连接 Token
 - 扩展会监听当前 profile 的 Google Labs 登录态变化，并自动同步到 Flow2API
 - 扩展会记住这个 profile 上一次成功同步所用的 Labs 会话上下文，后续后台刷新会优先回到同一组 store / container
@@ -84,7 +84,7 @@
     - 只有在 Flow2API 控制台确实未登录时，扩展才会把控制台打开到前台，提示你手动登录。
 
 3.  **自动同步**
-    连接成功后，扩展会监听 `labs.google` 的 session cookie 变化自动同步，并保留浏览器启动检查与后台兜底检查；必要时会静默唤醒一次或多次 Labs 页面来刷新当前 profile 的会话识别。
+    连接成功后，扩展会监听 `labs.google` 的 session cookie 变化自动同步，并保留浏览器启动检查与后台兜底检查；必要时会静默唤醒一次或多次 Labs 页面来刷新当前 profile 当前容器 / store 的会话识别。
     扩展的调度不再只依赖 Cookie 标注过期时间，而会结合 Flow2API 返回的账号过期时间、Cookie 时间和后台启发式探测节奏，尽量提前发现会话失效。
     如果只是 Labs session 过期、但浏览器登录仍有效，扩展会优先后台自动恢复；如果 Flow2API 插件连接 Token 失效但控制台登录仍有效，扩展也会后台重取连接配置再重试。如果恢复失败，会继续自动重试，并在通知里带上最近识别到的账号与 Flow2API 站点，方便你判断是哪个 profile。
 
@@ -109,7 +109,7 @@
 - 当用户填写 `Base URL` 且同浏览器已登录 Flow2API 控制台时，扩展会临时读取控制台的本地登录状态，以自动获取插件连接 Token
 - 当浏览器里存在现有登录态但页面未打开时，扩展可能会后台静默打开 `labs.google` 或 `Flow2API /manage` 页面，以发现当前 profile 可用的会话，然后自动关闭临时标签页
 - 提取到的登录态只会发送到用户自己填写的 `Base URL` 对应的 Flow2API 接口
-- 当前 profile 的同步状态和运行日志仅保存在当前浏览器 profile 本地
+- 当前 profile 的同步状态和运行日志仅保存在当前浏览器 profile 本地；在 Firefox / Zen 里，最近一次同步结果和 Labs 会话上下文还会按 cookie store / container 分开保存
 - `Base URL`、插件连接 Token、最近一次同步结果和日志都只保存在当前浏览器 profile 本地，不会再跨 profile 共享
 - 更多说明见 [privacy.html](privacy.html)
 

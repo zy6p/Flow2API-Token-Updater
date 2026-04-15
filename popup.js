@@ -25,9 +25,11 @@ async function loadSetupData() {
     try {
         setBusy(true);
         showStatus('正在读取当前配置...', 'info');
+        const cookieStoreId = await getCurrentCookieStoreId();
 
         const response = await extensionApi.runtime.sendMessage({
-            action: 'getSetupData'
+            action: 'getSetupData',
+            cookieStoreId
         });
 
         if (!response?.success) {
@@ -79,7 +81,7 @@ function renderSummary() {
         : '当前浏览器';
 
     document.getElementById('browserHint').textContent =
-        `${browserName} 里的每个 Profile 都有自己的 Google 登录态和 Flow2API 配置。扩展只处理当前这个 Profile，不会沿用别的 Profile。`;
+        `${browserName} 里的每个 Profile 都有自己的 Google 登录态和 Flow2API 配置；在 Firefox / Zen 里，不同容器 / cookie store 的最近同步状态也会分别记住。扩展只处理当前这个页面所属的 Profile / 容器，不会沿用别的账号。`;
 
     const hasBaseUrl = Boolean(state.baseUrl);
     const hasConnection = Boolean(state.hasConnection);
@@ -185,6 +187,7 @@ async function connectFlow2Api() {
     try {
         const baseUrl = collectBaseUrl();
         const originPattern = toOriginPattern(baseUrl);
+        const cookieStoreId = await getCurrentCookieStoreId();
 
         setBusy(true);
         showStatus('正在连接 Flow2API...', 'info');
@@ -193,7 +196,8 @@ async function connectFlow2Api() {
 
         const response = await extensionApi.runtime.sendMessage({
             action: 'connectBaseUrl',
-            baseUrl
+            baseUrl,
+            cookieStoreId
         });
 
         if (!response?.success) {
@@ -239,6 +243,7 @@ async function syncCurrentProfile() {
         const baseUrl = collectBaseUrl();
         const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
         const originPattern = toOriginPattern(normalizedBaseUrl);
+        const cookieStoreId = await getCurrentCookieStoreId();
 
         setBusy(true);
         showStatus('正在检查当前 Profile 的 Google Labs 登录态...', 'info');
@@ -250,11 +255,13 @@ async function syncCurrentProfile() {
         if (!state.baseUrl || state.baseUrl !== normalizedBaseUrl || !state.hasConnection) {
             response = await extensionApi.runtime.sendMessage({
                 action: 'connectBaseUrl',
-                baseUrl: normalizedBaseUrl
+                baseUrl: normalizedBaseUrl,
+                cookieStoreId
             });
         } else {
             response = await extensionApi.runtime.sendMessage({
-                action: 'syncNow'
+                action: 'syncNow',
+                cookieStoreId
             });
         }
 
@@ -295,18 +302,37 @@ async function syncCurrentProfile() {
 async function openConsole() {
     try {
         const baseUrl = collectBaseUrl(true);
+        const cookieStoreId = await getCurrentCookieStoreId();
         if (!baseUrl) {
             throw new Error('请先填写 Flow2API 地址');
         }
 
         await extensionApi.runtime.sendMessage({
             action: 'openConsole',
-            baseUrl
+            baseUrl,
+            cookieStoreId
         });
 
         showStatus('已打开 Flow2API 控制台', 'info');
     } catch (error) {
         showStatus(error.message, 'error');
+    }
+}
+
+async function getCurrentCookieStoreId() {
+    if (!extensionApi.tabs?.query) {
+        return null;
+    }
+
+    try {
+        const tabs = await extensionApi.tabs.query({
+            active: true,
+            currentWindow: true
+        });
+
+        return tabs[0]?.cookieStoreId || null;
+    } catch (error) {
+        return null;
     }
 }
 

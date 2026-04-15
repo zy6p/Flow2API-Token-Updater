@@ -93,11 +93,11 @@
 
             <h2>这些数据如何存储</h2>
             <ul>
-                <li>当前 Profile 的同步状态、最近一次成功同步所对应的 Labs 会话上下文，以及运行日志保存在当前浏览器 Profile 的本地存储中。</li>
+                <li>当前 Profile 的同步状态、最近一次成功同步所对应的 Labs 会话上下文，以及运行日志保存在当前浏览器 Profile 的本地存储中；在 Firefox / Zen 中，这些最近同步状态会按 cookie store / container 分开记住。</li>
                 <li>Flow2API 地址、插件连接 Token、最近一次同步结果和日志都只保存在当前浏览器 Profile 的本地存储中，不会跨 Profile 共享。</li>
                 <li>扩展升级时会清理旧版本遗留的跨 Profile 同步配置，避免新 Profile 继承旧 Profile 的 Flow2API 账号信息。</li>
                 <li>Flow2API 控制台本地登录状态仅用于即时发现插件连接配置；扩展不会把管理员登录 token 单独同步到第三方服务器。</li>
-                <li>浏览器 Profile 的 Google 登录态彼此独立；每个 Profile 只会处理自己的 Google Labs 登录状态和自己的 Flow2API 配置。</li>
+                <li>浏览器 Profile 的 Google 登录态彼此独立；每个 Profile 只会处理自己的 Google Labs 登录状态和自己的 Flow2API 配置。在 Firefox / Zen 中，不同 cookie store / container 的最近同步结果也会彼此隔离。</li>
                 <li>扩展不会把数据发送到扩展作者控制的服务器。</li>
             </ul>
 
