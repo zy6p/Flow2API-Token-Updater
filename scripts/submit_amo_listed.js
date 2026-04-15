@@ -5,17 +5,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
+const { loadAmoCredentials } = require(path.join(ROOT_DIR, 'scripts', 'amo_credentials.js'));
 const API_BASE = process.env.AMO_API_BASE || 'https://addons.mozilla.org/api/v5';
 const ADDON_ID = (process.env.AMO_ADDON_ID || 'flow2api-token-updater').trim();
-const API_KEY = `${process.env.AMO_API_KEY || ''}`.trim();
-const API_SECRET = `${process.env.AMO_API_SECRET || ''}`.trim();
+const { apiKey: API_KEY, apiSecret: API_SECRET } = loadAmoCredentials(ROOT_DIR);
 const UPLOAD_TIMEOUT_MS = Number(process.env.AMO_UPLOAD_TIMEOUT_MS || 120000);
 const UPLOAD_POLL_INTERVAL_MS = Number(process.env.AMO_UPLOAD_POLL_INTERVAL_MS || 2000);
 
-if (!API_KEY || !API_SECRET) {
-    console.error('AMO_API_KEY and AMO_API_SECRET are required.');
-    process.exit(1);
-}
 
 const manifest = JSON.parse(
     fs.readFileSync(path.join(ROOT_DIR, 'manifest.json'), 'utf8')

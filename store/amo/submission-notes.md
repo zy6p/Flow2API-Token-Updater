@@ -19,7 +19,7 @@ This extension is designed for users who run their own Flow2API service.
 - If the previously discovered plugin connection token is rejected but the browser still has a reusable Flow2API console login, the extension may silently reopen the user's own `/manage` page in a background tab, rediscover the plugin connection token, and retry exactly once.
 - The extension does not send analytics, ads, telemetry, or tracking data to the developer.
 - Local per-profile sync state is stored in `storage.local`.
-- When browser sync storage is available, the Flow2API address and discovered plugin connection token may also be stored in `storage.sync` so the user's other browser profiles under the same browser account can reuse the Flow2API connection setup.
+- Flow2API address and discovered plugin connection token are now also kept per-profile in `storage.local`; the add-on no longer shares them through `storage.sync`.
 
 ## Build and sign
 
@@ -39,10 +39,13 @@ export AMO_API_SECRET='your-amo-jwt-secret'
 
 This listed release script talks to the AMO V5 API directly instead of relying on `web-ext sign`, because the direct API flow has been more reliable for this add-on.
 
-Submit an unlisted AMO signing request for self-distribution:
+Submit an unlisted AMO signing request for self-distribution and download the signed auto-update XPI:
 
 ```bash
 export AMO_API_KEY='your-amo-jwt-issuer'
 export AMO_API_SECRET='your-amo-jwt-secret'
+export FLOW2API_PUBLIC_BASE_URL='https://banana.rematrixed.com'
 ./scripts/sign_amo_unlisted.sh
 ```
+
+This unlisted release script builds a Gecko package with `browser_specific_settings.gecko.update_url`, submits it through the AMO V5 API, waits until the signed file becomes public in the unlisted channel, and downloads the signed XPI back into `dist/firefox/`.

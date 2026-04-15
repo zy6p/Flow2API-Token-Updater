@@ -7,6 +7,13 @@ const WAITING_FOR_LABS_MESSAGE = 'Flow2API 已接入。当前 Profile 的 Google
 const ACCOUNT_SECRETS_KEY = 'accountSecrets';
 const SHARED_BASE_URL_KEY = 'sharedBaseUrl';
 const SHARED_CONNECTION_TOKEN_KEY = 'sharedConnectionToken';
+const LEGACY_SYNC_CONFIG_KEYS = [
+    SHARED_BASE_URL_KEY,
+    SHARED_CONNECTION_TOKEN_KEY,
+    'accounts',
+    'apiUrl',
+    'connectionToken'
+];
 const SYNC_ALARM_NAME = 'flow2apiSafetySync';
 const DEFAULT_SAFETY_SYNC_MINUTES = 360;
 const WAITING_RETRY_MINUTES = 5;
@@ -68,6 +75,7 @@ const Logger = {
 
 extensionApi.runtime.onInstalled.addListener(async () => {
     await migrateLegacyConfig();
+    await clearLegacySharedConfig();
     await Logger.info('Flow2API Token Updater installed');
     await refreshSafetyAlarm();
 });
@@ -75,6 +83,7 @@ extensionApi.runtime.onInstalled.addListener(async () => {
 if (extensionApi.runtime.onStartup) {
     extensionApi.runtime.onStartup.addListener(async () => {
         await migrateLegacyConfig();
+        await clearLegacySharedConfig();
         await refreshSafetyAlarm();
 
         const settings = await loadSettings();
@@ -499,7 +508,6 @@ async function hydrateConnectionFromConsole(baseUrl, {
         baseUrl: normalized.origin,
         connectionToken
     });
-    await saveSharedConfig(normalized.origin, connectionToken);
 
     await Logger.success('Flow2API connection discovered from console', {
         baseUrl: normalized.origin
@@ -1467,52 +1475,35 @@ async function hasOriginPermission(origin) {
 }
 
 async function loadSettings() {
-    const [stored, synced] = await Promise.all([
-        extensionApi.storage.local.get([
-            'baseUrl',
-            'connectionToken',
-            'lastSync',
-            'sessionContext',
-            'consoleContext'
-        ]),
-        safeGetSyncStorage([
-            SHARED_BASE_URL_KEY,
-            SHARED_CONNECTION_TOKEN_KEY
-        ])
+    const stored = await extensionApi.storage.local.get([
+        'baseUrl',
+        'connectionToken',
+        'lastSync',
+        'sessionContext',
+        'consoleContext'
     ]);
 
     const localBaseUrl = typeof stored.baseUrl === 'string' ? stored.baseUrl.trim() : '';
     const localConnectionToken = typeof stored.connectionToken === 'string'
         ? stored.connectionToken.trim()
         : '';
-    const sharedBaseUrl = typeof synced[SHARED_BASE_URL_KEY] === 'string'
-        ? synced[SHARED_BASE_URL_KEY].trim()
-        : '';
-    const sharedConnectionToken = typeof synced[SHARED_CONNECTION_TOKEN_KEY] === 'string'
-        ? synced[SHARED_CONNECTION_TOKEN_KEY].trim()
-        : '';
 
     return {
-        baseUrl: localBaseUrl || sharedBaseUrl,
-        connectionToken: localConnectionToken || sharedConnectionToken,
+        baseUrl: localBaseUrl,
+        connectionToken: localConnectionToken,
         lastSync: stored.lastSync && typeof stored.lastSync === 'object' ? stored.lastSync : null,
         sessionContext: normalizeSessionContext(stored.sessionContext),
         consoleContext: normalizeConsoleContext(stored.consoleContext),
-        configSource: localBaseUrl || localConnectionToken
-            ? 'local'
-            : ((sharedBaseUrl || sharedConnectionToken) ? 'sync' : 'none')
+        configSource: localBaseUrl || localConnectionToken ? 'local' : 'none'
     };
 }
 
 async function migrateLegacyConfig() {
-    const [localStored, syncStored] = await Promise.all([
-        extensionApi.storage.local.get([
-            'baseUrl',
-            'connectionToken',
-            'apiUrl',
-            ACCOUNT_SECRETS_KEY
-        ]),
-        safeGetSyncStorage(['accounts', 'apiUrl', 'connectionToken'])
+    const localStored = await extensionApi.storage.local.get([
+        'baseUrl',
+        'connectionToken',
+        'apiUrl',
+        ACCOUNT_SECRETS_KEY
     ]);
 
     if (localStored.baseUrl && localStored.connectionToken) {
@@ -1524,8 +1515,13 @@ async function migrateLegacyConfig() {
         ? localStored.connectionToken.trim()
         : '';
 
+    const localSecrets = normalizeSecretsMap(localStored[ACCOUNT_SECRETS_KEY]);
+    const canReuseLegacySync = Object.keys(localSecrets).length > 0;
+    const syncStored = canReuseLegacySync
+        ? await safeGetSyncStorage(['accounts', 'apiUrl', 'connectionToken'])
+        : {};
+
     if (!legacyApiUrl || !legacyConnectionToken) {
-        const localSecrets = normalizeSecretsMap(localStored[ACCOUNT_SECRETS_KEY]);
         const account = pickPrimaryAccount(
             Array.isArray(syncStored.accounts)
                 ? syncStored.accounts.map((item) => normalizeLegacyAccount({
@@ -1556,9 +1552,8 @@ async function migrateLegacyConfig() {
         baseUrl,
         connectionToken: legacyConnectionToken
     });
-    await saveSharedConfig(baseUrl, legacyConnectionToken);
 
-    await Logger.info('Legacy config migrated to single baseUrl model', {
+    await Logger.info('Legacy config migrated to per-profile baseUrl model', {
         baseUrl
     });
 
@@ -1573,16 +1568,29 @@ async function safeGetSyncStorage(keys) {
     }
 }
 
-async function saveSharedConfig(baseUrl, connectionToken) {
+async function clearLegacySharedConfig() {
+    if (!extensionApi.storage?.sync?.remove) {
+        return false;
+    }
+
     try {
-        await extensionApi.storage.sync.set({
-            [SHARED_BASE_URL_KEY]: baseUrl,
-            [SHARED_CONNECTION_TOKEN_KEY]: connectionToken
+        const synced = await safeGetSyncStorage(LEGACY_SYNC_CONFIG_KEYS);
+        const keysToRemove = LEGACY_SYNC_CONFIG_KEYS.filter((key) => synced[key] !== undefined);
+
+        if (keysToRemove.length === 0) {
+            return false;
+        }
+
+        await extensionApi.storage.sync.remove(keysToRemove);
+        await Logger.info('Cleared legacy cross-profile sync config', {
+            keys: keysToRemove
         });
+        return true;
     } catch (error) {
-        await Logger.info('Shared config sync skipped', {
+        await Logger.info('Legacy shared config cleanup skipped', {
             error: error.message
         });
+        return false;
     }
 }
 

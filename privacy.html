@@ -85,7 +85,7 @@
             <ul>
                 <li>浏览器 Cookie：仅用于读取 <code>labs.google</code> 相关会话，并查找 <code>__Secure-next-auth.session-token</code>。</li>
                 <li>用户配置：Flow2API 地址、自动发现到的连接 Token，以及本地运行所需的最小配置。</li>
-                <li>Flow2API 控制台本地登录状态：当用户填写 Flow2API 地址且授权访问该站点时，扩展会尝试读取同浏览器中该 Flow2API 控制台的本地登录状态，用于自动获取插件连接 Token。</li>
+                <li>Flow2API 控制台本地登录状态：扩展拥有 HTTP / HTTPS 站点访问权限，用于读取用户当前填写的 Flow2API 控制台本地登录状态，并自动获取插件连接 Token；不会因此去扫描未配置的其他站点。</li>
                 <li>后台临时标签页：当浏览器中已经存在可复用的登录态但相关页面未打开时，扩展可能会静默打开 <code>labs.google</code> 或用户配置的 Flow2API <code>/manage</code> 页面，以发现当前 Profile 可用的会话，并在完成后自动关闭临时标签页。</li>
                 <li>连接 Token：用于把提取到的会话数据发送到用户配置的 Flow2API 接口。</li>
                 <li>本地运行日志：仅用于帮助用户排查同步问题。</li>
@@ -94,9 +94,10 @@
             <h2>这些数据如何存储</h2>
             <ul>
                 <li>当前 Profile 的同步状态、最近一次成功同步所对应的 Labs 会话上下文，以及运行日志保存在当前浏览器 Profile 的本地存储中。</li>
-                <li>如果浏览器同步存储可用，扩展会把 Flow2API 地址和连接 Token 作为共享配置写入浏览器同步存储，以便同一浏览器账号下的其他 Profile 可以直接沿用；但 Labs 会话上下文不会跨 Profile 共享。</li>
+                <li>Flow2API 地址、插件连接 Token、最近一次同步结果和日志都只保存在当前浏览器 Profile 的本地存储中，不会跨 Profile 共享。</li>
+                <li>扩展升级时会清理旧版本遗留的跨 Profile 同步配置，避免新 Profile 继承旧 Profile 的 Flow2API 账号信息。</li>
                 <li>Flow2API 控制台本地登录状态仅用于即时发现插件连接配置；扩展不会把管理员登录 token 单独同步到第三方服务器。</li>
-                <li>浏览器 Profile 的 Google 登录态彼此独立；即使 Flow2API 地址被沿用，每个 Profile 仍只会处理自己的 Google Labs 登录状态。</li>
+                <li>浏览器 Profile 的 Google 登录态彼此独立；每个 Profile 只会处理自己的 Google Labs 登录状态和自己的 Flow2API 配置。</li>
                 <li>扩展不会把数据发送到扩展作者控制的服务器。</li>
             </ul>
 

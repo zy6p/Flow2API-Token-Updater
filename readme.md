@@ -12,7 +12,8 @@
 - 如果浏览器里已经存在 Google Labs / Flow2API 的登录态，即使对应页面没有打开，扩展也会在后台静默探测并自动同步
 
 > 注意：浏览器 **profile 之间是完全隔离** 的。  
-> 如果你有多个 Zen / Firefox profile，需要在每个 profile 里分别安装并填写一次连接配置。  
+> 如果你有多个 Zen / Firefox profile，需要在每个 profile 里分别安装一次扩展，并分别填写各自的连接配置。  
+> 当前版本开始，扩展不再跨 profile 共享 `Base URL` 或连接 Token；新 profile 不会再继承上一个 profile 的内容。  
 > 同一个 Google 账号如果同时登录在多个 profile，建议只选择一个 profile 开启定时同步。
 
 需要配合 [Flow2api](https://github.com/TheSmallHanCat/flow2api) 服务使用。
@@ -51,7 +52,8 @@
     这是开发态安装方式，浏览器重启后需要重新加载一次。
     未签名的 `.xpi` 在 Firefox / Zen 的 `about:addons` 正式安装路径里通常会显示“附加组件似乎已损坏”，这不是代码损坏，而是签名校验未通过。
     Firefox / Zen 不要直接加载仓库根目录的 `manifest.json`。仓库根目录是给 Chromium 和 Gecko 共用的开发源，Gecko 请优先使用上面生成的临时包，或下面的运行脚本。
-    如果要做长期安装，需要签名后的 XPI 包，或使用允许未签名扩展的开发版环境。
+    如果要做长期安装，请优先使用签名后的自更新 XPI：`https://banana.rematrixed.com/downloads/latest-firefox-selfhost.xpi`。
+    临时加载扩展不会自动更新；如果你有很多 profile，需要无感更新，不要继续走临时加载路径。
 
 5.  **命令行启动开发态临时扩展**
     如果不想每次手动点 `about:debugging`，可以直接运行：
@@ -96,7 +98,7 @@
 
 1.  只在真正持有 Google Labs 登录态的 profile 里安装和配置扩展。
 2.  每个要用的 profile 里各填一次 `Base URL`。
-    如果浏览器同步存储可用，Flow2API 的 `Base URL` 和插件连接 Token 也可能自动沿用到同浏览器账号下的其他 profile；但每个 profile 的 Google Labs 登录态仍然完全独立。
+    扩展现在不会再把 `Base URL` 或插件连接 Token 沿用到其他 profile；每个 profile 都维护自己的 Flow2API 配置和 Google Labs 登录态。
 3.  如果同一个 Google 账号同时登录在多个 profile，只选一个 profile 启用定时同步。
 4.  其余 profile 可以不装扩展，或者装了但不保存配置。
 5.  不要让多个 profile 长期对同一套 Flow2API 账号池反复覆盖同一个 Google 账号，否则通常是谁最后同步谁覆盖。
@@ -108,11 +110,11 @@
 - 当浏览器里存在现有登录态但页面未打开时，扩展可能会后台静默打开 `labs.google` 或 `Flow2API /manage` 页面，以发现当前 profile 可用的会话，然后自动关闭临时标签页
 - 提取到的登录态只会发送到用户自己填写的 `Base URL` 对应的 Flow2API 接口
 - 当前 profile 的同步状态和运行日志仅保存在当前浏览器 profile 本地
-- 如果浏览器同步存储可用，`Base URL` 和插件连接 Token 可能会写入浏览器同步存储，供同浏览器账号下的其他 profile 沿用
+- `Base URL`、插件连接 Token、最近一次同步结果和日志都只保存在当前浏览器 profile 本地，不会再跨 profile 共享
 - 更多说明见 [privacy.html](privacy.html)
 
 ## 五、 上架前建议
 
 - 如果要发布到扩展市场，建议准备一个可公开访问的 HTTPS 隐私政策页面
 - Chrome Web Store 会重点检查敏感权限、数据用途与隐私披露
-- Firefox / Zen 生态通常需要签名后的 XPI 包
+- Firefox / Zen 生态通常需要签名后的 XPI 包；长期使用建议走自分发签名包 + `updates.json` 自动更新链

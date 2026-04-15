@@ -47,8 +47,6 @@ async function loadSetupData() {
             showStatus('这个 Profile 已经就绪。', 'success');
         } else if (state.lastSync?.status === 'error') {
             showStatus(state.lastSync.message || '这次同步没有完成。', 'error');
-        } else if (state.hasConnection && state.configSource === 'sync') {
-            showStatus('已沿用同浏览器里的 Flow2API 设置。现在只需要同步这个 Profile。', 'info');
         } else if (state.lastSync?.status === 'waiting_session' || state.hasConnection) {
             showStatus(state.lastSync?.message || 'Flow2API 已接入，等你在这个 Profile 登录 Labs。', 'info');
         } else if (state.baseUrl) {
@@ -81,7 +79,7 @@ function renderSummary() {
         : '当前浏览器';
 
     document.getElementById('browserHint').textContent =
-        `${browserName} 里的每个 Profile 都有自己的 Google 登录态。扩展只处理当前这个 Profile，Flow2API 地址会尽量自动沿用。`;
+        `${browserName} 里的每个 Profile 都有自己的 Google 登录态和 Flow2API 配置。扩展只处理当前这个 Profile，不会沿用别的 Profile。`;
 
     const hasBaseUrl = Boolean(state.baseUrl);
     const hasConnection = Boolean(state.hasConnection);
@@ -164,15 +162,6 @@ function getUiModel() {
             text: 'Google Labs 登录态有变化时，扩展会自动同步到 Flow2API。你通常不需要手动操作。',
             actionLabel: '立即重新同步',
             actionNote: '只有在你刚切换 Labs 账号，或者想立刻刷新时，才需要点这一下。'
-        };
-    }
-
-    if (state.configSource === 'sync') {
-        return {
-            title: '这个 Profile 还没开始同步',
-            text: '我已经沿用了同浏览器里的 Flow2API 设置。现在只需要读取这个 Profile 自己的 Labs 登录态。',
-            actionLabel: '同步这个 Profile',
-            actionNote: '不会影响其他 Profile，只会处理你现在打开的这个。'
         };
     }
 
@@ -322,19 +311,29 @@ async function openConsole() {
 }
 
 async function ensureHostPermission(originPattern) {
-    if (!extensionApi.permissions?.request) {
+    if (!extensionApi.permissions?.contains) {
         return;
     }
 
-    // permissions.request must be triggered directly from a user gesture.
-    // Avoid any preceding async permission checks here.
-    const approved = await extensionApi.permissions.request({
+    const approved = await extensionApi.permissions.contains({
         origins: [originPattern]
     });
 
-    if (!approved) {
-        throw new Error('需要允许扩展访问这个 Flow2API 地址，才能自动读取控制台设置');
+    if (approved) {
+        return;
     }
+
+    if (extensionApi.permissions?.request) {
+        const requested = await extensionApi.permissions.request({
+            origins: [originPattern]
+        });
+
+        if (requested) {
+            return;
+        }
+    }
+
+    throw new Error('请在扩展详情里允许访问这个 Flow2API 站点，或把站点访问改成“在所有网站上”后重试');
 }
 
 function collectBaseUrl(allowEmpty = false) {

@@ -57,6 +57,12 @@ function createStorageArea(initialState = {}) {
         async set(values) {
             Object.assign(state, values);
         },
+        async remove(keys) {
+            const list = Array.isArray(keys) ? keys : [keys];
+            for (const key of list) {
+                delete state[key];
+            }
+        },
         dump() {
             return { ...state };
         }
@@ -409,10 +415,7 @@ async function testConnectionSucceedsWithoutLabsSession() {
     assert.equal(stored.baseUrl, FLOW2API_ORIGIN);
     assert.equal(stored.connectionToken, 'connection-token');
     assert.equal(stored.lastSync.status, 'waiting_session');
-    const shared = harness.syncStorageArea.dump();
-    assert.equal(shared.sharedBaseUrl, FLOW2API_ORIGIN);
-    assert.equal(shared.sharedConnectionToken, 'connection-token');
-
+    assert.deepEqual(harness.syncStorageArea.dump(), {});
     const updateCalls = harness.apiCalls.filter((call) => call.url.endsWith('/api/plugin/update-token'));
     assert.equal(updateCalls.length, 0, 'should not push session when Labs cookie is missing');
 }
@@ -468,43 +471,26 @@ async function testSyncFindsCookieOutsideDefaultStore() {
         '2026-01-01T12:00:00.000Z',
         'should schedule by access-token expiry when it is earlier than the Labs cookie expiry'
     );
-    const shared = harness.syncStorageArea.dump();
-    assert.equal(shared.sharedBaseUrl, FLOW2API_ORIGIN);
-    assert.equal(shared.sharedConnectionToken, 'connection-token');
+    assert.deepEqual(harness.syncStorageArea.dump(), {});
 }
 
-async function testSharedConfigCanBootstrapAnotherProfile() {
+async function testFreshProfileIgnoresLegacySharedConfig() {
     const harness = createHarness({
-        tabs: [{
-            id: 2,
-            windowId: 1,
-            active: false,
-            status: 'complete',
-            url: LABS_URL,
-            cookieStoreId: 'firefox-container-9'
-        }],
-        cookies: [{
-            name: SESSION_COOKIE_NAME,
-            value: 'shared-profile-session',
-            domain: 'labs.google',
-            path: '/',
-            storeId: 'firefox-container-9',
-            firstPartyDomain: null,
-            expirationDate: 1796054400
-        }],
         syncState: {
             sharedBaseUrl: FLOW2API_ORIGIN,
-            sharedConnectionToken: 'connection-token'
+            sharedConnectionToken: 'connection-token',
+            apiUrl: FLOW2API_ORIGIN,
+            connectionToken: 'legacy-sync-token'
         }
     });
 
     const background = loadBackground(harness);
     const setup = await background.getSetupData();
 
-    assert.equal(setup.settings.baseUrl, FLOW2API_ORIGIN);
-    assert.equal(setup.settings.connectionToken, 'connection-token');
-    assert.equal(setup.settings.configSource, 'sync');
-    assert.equal(setup.hasConnection, true);
+    assert.equal(setup.settings.baseUrl, '');
+    assert.equal(setup.settings.connectionToken, '');
+    assert.equal(setup.settings.configSource, 'none');
+    assert.equal(setup.hasConnection, false);
 
     const result = await background.syncCurrentSession({
         reason: 'manual_sync',
@@ -512,15 +498,11 @@ async function testSharedConfigCanBootstrapAnotherProfile() {
         notifyOnError: false
     });
 
-    assert.equal(result.success, true);
-    assert.equal(result.lastSync.status, 'success');
-
-    const updateCall = harness.apiCalls.find((call) => call.url.endsWith('/api/plugin/update-token'));
-    assert.ok(updateCall, 'shared config should allow syncing without reconnecting Flow2API');
-    assert.equal(updateCall.body.session_token, 'shared-profile-session');
+    assert.equal(result.success, false);
+    assert.match(result.error, /Flow2API 地址/);
 }
 
-async function testSharedConfigFallsBackToSixHourSafetySyncWithoutAdminSession() {
+async function testPerProfileConfigFallsBackToSixHourSafetySyncWithoutAdminSession() {
     const harness = createHarness({
         tabs: [{
             id: 2,
@@ -532,20 +514,21 @@ async function testSharedConfigFallsBackToSixHourSafetySyncWithoutAdminSession()
         }],
         cookies: [{
             name: SESSION_COOKIE_NAME,
-            value: 'shared-profile-session-no-admin',
+            value: 'local-profile-session-no-admin',
             domain: 'labs.google',
             path: '/',
             storeId: 'firefox-container-10',
             firstPartyDomain: null,
             expirationDate: 1796054400
-        }],
-        syncState: {
-            sharedBaseUrl: FLOW2API_ORIGIN,
-            sharedConnectionToken: 'connection-token'
-        }
+        }]
     });
 
     const background = loadBackground(harness);
+    await harness.localStorageArea.set({
+        baseUrl: FLOW2API_ORIGIN,
+        connectionToken: 'connection-token'
+    });
+
     const result = await background.syncCurrentSession({
         reason: 'manual_sync',
         allowLabsWakeup: false,
@@ -883,8 +866,8 @@ async function main() {
     const tests = [
         ['connects Flow2API even when Labs session is missing', testConnectionSucceedsWithoutLabsSession],
         ['syncs using a Labs cookie found in a non-default Firefox store', testSyncFindsCookieOutsideDefaultStore],
-        ['bootstraps another profile from shared Flow2API config', testSharedConfigCanBootstrapAnotherProfile],
-        ['caps safety sync to six hours when admin expiry metadata is unavailable', testSharedConfigFallsBackToSixHourSafetySyncWithoutAdminSession],
+        ['ignores legacy shared config when a fresh profile starts', testFreshProfileIgnoresLegacySharedConfig],
+        ['caps safety sync to six hours when admin expiry metadata is unavailable', testPerProfileConfigFallsBackToSixHourSafetySyncWithoutAdminSession],
         ['silently wakes Flow2API console to recover expiry metadata for known connections', testKnownConnectionCanSilentlyWakeConsoleForExpiryMetadata],
         ['wakes the previously successful Labs cookie store before falling back to other stores', testPreferredSessionContextCanWakeSpecificStore],
         ['recovers from a stale Flow2API connection token by rehydrating from the console', testStaleConnectionTokenCanRecoverFromConsole],
