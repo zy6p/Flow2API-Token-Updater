@@ -37,6 +37,8 @@ export AMO_API_SECRET='your-amo-jwt-secret'
 ./scripts/sign_amo_listed.sh
 ```
 
+This listed release script talks to the AMO V5 API directly instead of relying on `web-ext sign`, because the direct API flow has been more reliable for this add-on.
+
 Submit an unlisted AMO signing request for self-distribution:
 
 ```bash
