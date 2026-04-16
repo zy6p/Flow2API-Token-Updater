@@ -19,6 +19,9 @@ const manifest = JSON.parse(
 const metadata = JSON.parse(
     fs.readFileSync(path.join(ROOT_DIR, 'store/amo/metadata.listed.json'), 'utf8')
 );
+const eulaPolicy = JSON.parse(
+    fs.readFileSync(path.join(ROOT_DIR, 'store/amo/eula-policy.json'), 'utf8')
+);
 const packagePath = path.join(
     ROOT_DIR,
     'web-ext-artifacts',
@@ -27,6 +30,9 @@ const packagePath = path.join(
 
 async function main() {
     ensureFileExists(packagePath);
+
+    await updateAddonListing();
+    await updateAddonEulaPolicy();
 
     const currentAddon = await getAddon();
     const currentVersion = currentAddon.current_version?.version || null;
@@ -122,6 +128,40 @@ async function getAddon() {
     return amoFetch(`${API_BASE}/addons/addon/${ADDON_ID}/`);
 }
 
+async function updateAddonListing() {
+    const payload = buildListingPayload(metadata);
+    if (Object.keys(payload).length === 0) {
+        return;
+    }
+
+    const addon = await amoFetch(`${API_BASE}/addons/addon/${ADDON_ID}/`, {
+        method: 'PATCH',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+    });
+
+    console.log(`AMO listing metadata updated for addon ${addon.slug || ADDON_ID}`);
+}
+
+async function updateAddonEulaPolicy() {
+    const payload = buildEulaPolicyPayload(eulaPolicy);
+    if (Object.keys(payload).length === 0) {
+        return;
+    }
+
+    await amoFetch(`${API_BASE}/addons/addon/${ADDON_ID}/eula_policy/`, {
+        method: 'PATCH',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+    });
+
+    console.log(`AMO privacy policy updated for addon ${ADDON_ID}`);
+}
+
 async function createUpload(filePath) {
     const form = new FormData();
     const filename = path.basename(filePath);
@@ -186,6 +226,51 @@ function printValidationErrors(validation) {
     for (const message of messages) {
         console.error(`- [${message.type || 'unknown'}] ${message.message || JSON.stringify(message)}`);
     }
+}
+
+function buildListingPayload(source) {
+    const payload = {};
+
+    if (Array.isArray(source.categories) && source.categories.length > 0) {
+        payload.categories = {
+            firefox: source.categories
+        };
+    }
+
+    if (isLocaleMap(source.summary)) {
+        payload.summary = source.summary;
+    }
+
+    if (isLocaleMap(source.description)) {
+        payload.description = source.description;
+    }
+
+    if (isLocaleMap(source.homepage)) {
+        payload.homepage = source.homepage;
+    }
+
+    return payload;
+}
+
+function buildEulaPolicyPayload(source) {
+    const payload = {};
+
+    if (isLocaleMap(source.privacy_policy)) {
+        payload.privacy_policy = source.privacy_policy;
+    }
+
+    if (isLocaleMap(source.eula)) {
+        payload.eula = source.eula;
+    }
+
+    return payload;
+}
+
+function isLocaleMap(value) {
+    return Boolean(value)
+        && typeof value === 'object'
+        && !Array.isArray(value)
+        && Object.keys(value).length > 0;
 }
 
 function sleep(ms) {

@@ -42,6 +42,7 @@ export AMO_API_SECRET='your-amo-jwt-secret'
 ```
 
 This listed release script talks to the AMO V5 API directly instead of relying on `web-ext sign`, because the direct API flow has been more reliable for this add-on. The listed build is created with `AMO_LISTED_REVIEW_MODE=1`, which narrows install-time host permissions and moves Flow2API site access to runtime optional host permissions.
+It also patches the top-level AMO listing metadata and privacy policy from `store/amo/metadata.listed.json` and `store/amo/eula-policy.json` before deciding whether a new listed version needs to be created.
 
 Submit an unlisted AMO signing request for self-distribution and download the signed auto-update XPI:
 
