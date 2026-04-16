@@ -73,7 +73,7 @@
     <main>
         <div class="card">
             <h1>Flow2API Token Updater 隐私政策</h1>
-            <div class="meta">最后更新：2026-04-15</div>
+            <div class="meta">最后更新：2026-04-16</div>
 
             <p>
                 Flow2API Token Updater 是一个本地浏览器扩展，用于在用户明确配置后，
@@ -112,6 +112,7 @@
             <ul>
                 <li>帮助用户将 Google Labs 登录态同步到自己的 Flow2API 服务。</li>
                 <li>在用户首次连接后，监听 Google Labs 登录态变化并自动同步；必要时做浏览器启动检查、后台兜底检查，以及静默会话唤醒。扩展会优先使用当前 Profile 上一次成功同步所对应的 Labs 会话上下文，减少多容器 / 多 store 场景下的误判。</li>
+                <li>在覆盖现有 Flow2API token 前，扩展会尽量先验证候选 Labs 会话是否仍然有效；如果识别到的是已经失效的旧 Cookie，或当前无法验证这枚 Cookie 是否可用，扩展会忽略它并保留现有 token，稍后继续自动重试。</li>
                 <li>当 Labs 会话过期但浏览器登录仍可复用时，扩展会自动尝试恢复；当 Flow2API 插件连接 Token 失效但控制台登录仍可复用时，扩展也会尝试后台重新发现连接配置并重试同步。如果恢复失败，扩展可能通过浏览器通知提示最近识别到的账号和目标 Flow2API 站点，便于用户定位当前 Profile。</li>
                 <li>通过本地日志展示成功或失败状态，便于排查问题。</li>
             </ul>

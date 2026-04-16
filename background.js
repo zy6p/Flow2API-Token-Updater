@@ -4,6 +4,7 @@ const LABS_URL = 'https://labs.google/fx/vi/tools/flow';
 const LABS_COOKIE_URL = 'https://labs.google/';
 const SESSION_COOKIE_NAME = '__Secure-next-auth.session-token';
 const WAITING_FOR_LABS_MESSAGE = 'Flow2API 已接入。当前 Profile 的 Google Labs 会话暂时不可用，扩展会后台自动重试；如果浏览器登录本身也失效了，再手动登录一次即可。';
+const PRESERVE_EXISTING_TOKEN_MESSAGE = '当前无法验证 Google Labs 会话，扩展已保留现有 token，不会用未验证的 Cookie 覆盖；稍后会继续自动重试。';
 const ACCOUNT_SECRETS_KEY = 'accountSecrets';
 const SHARED_BASE_URL_KEY = 'sharedBaseUrl';
 const SHARED_CONNECTION_TOKEN_KEY = 'sharedConnectionToken';
@@ -381,15 +382,6 @@ async function performSync({
             cookieStoreId: normalizeCookieStoreId(cookieStoreId) || null
         });
 
-        const sessionCookie = await getSessionCookie({
-            loadIfMissing: allowLabsWakeup,
-            preferredContext: preferredSessionContext
-        });
-
-        if (!sessionCookie?.value) {
-            throw new Error('未找到当前 Profile 的 Google Labs 登录态，请先在这个 Profile 里登录 Labs');
-        }
-
         let derivedAccount = null;
 
         if (!adminToken) {
@@ -404,14 +396,25 @@ async function performSync({
             }
         }
 
-        if (adminToken) {
-            try {
-                derivedAccount = await convertSessionToken(effectiveBaseUrl, adminToken, sessionCookie.value);
-            } catch (error) {
-                await Logger.info('ST metadata lookup skipped', {
-                    reason: error.message
-                });
+        const sessionResolution = await resolveSessionCookie({
+            baseUrl: effectiveBaseUrl,
+            adminToken,
+            loadIfMissing: allowLabsWakeup,
+            preferredContext: preferredSessionContext
+        });
+        const sessionCookie = sessionResolution.cookie;
+        derivedAccount = sessionResolution.derivedAccount;
+
+        if (!sessionCookie?.value) {
+            if (sessionResolution.invalidCandidates.length > 0) {
+                throw new Error('当前识别到的 Google Labs Cookie 都已失效，扩展已忽略这些旧 Cookie；请重新激活 Labs 会话');
             }
+
+            throw new Error('未找到当前 Profile 的 Google Labs 登录态，请先在这个 Profile 里登录 Labs');
+        }
+
+        if (!derivedAccount && !adminToken && shouldPreserveExistingToken(settings.lastSync, reason)) {
+            throw new Error(PRESERVE_EXISTING_TOKEN_MESSAGE);
         }
 
         const pushResult = await pushSessionTokenWithRecovery({
@@ -482,9 +485,9 @@ async function performSync({
             message: syncPayload.message || '同步成功'
         };
     } catch (error) {
-        const waitingForLabs = isMissingLabsSessionError(error);
-        const lastSync = waitingForLabs
-            ? createWaitingSessionState(settings.lastSync, reason)
+        const waitingForSession = isWaitingSessionError(error);
+        const lastSync = waitingForSession
+            ? createWaitingSessionState(settings.lastSync, reason, error.message)
             : {
                 status: 'error',
                 reason,
@@ -498,34 +501,34 @@ async function performSync({
             };
 
         await saveScopedSettings(cookieStoreId, { lastSync });
-        await (waitingForLabs ? Logger.info : Logger.error).call(Logger, waitingForLabs ? 'Waiting for Google Labs session' : 'Session sync failed', {
+        await (waitingForSession ? Logger.info : Logger.error).call(Logger, waitingForSession ? 'Waiting for Google Labs session' : 'Session sync failed', {
             reason,
             error: error.message,
             cookieStoreId: normalizeCookieStoreId(cookieStoreId) || null
         });
 
-        if (waitingForLabs) {
+        if (waitingForSession) {
             await refreshSafetyAlarm();
         }
 
-        if (waitingForLabs && notifyOnError) {
+        if (waitingForSession && notifyOnError) {
             await createNotification(
                 'Flow2API 正在等待当前 Profile 的 Labs 会话',
                 buildProfileHintMessage({
                     baseUrl: effectiveBaseUrl,
                     email: settings.lastSync?.email || null,
-                    fallback: '扩展已后台尝试恢复；如果仍未恢复，会继续自动重试。'
+                    fallback: lastSync.message || '扩展已后台尝试恢复；如果仍未恢复，会继续自动重试。'
                 })
             );
         }
 
-        if (notifyOnError && !waitingForLabs) {
+        if (notifyOnError && !waitingForSession) {
             await createNotification('Flow2API 同步失败', error.message);
         }
 
         return {
             success: false,
-            error: waitingForLabs ? WAITING_FOR_LABS_MESSAGE : error.message,
+            error: waitingForSession ? lastSync.message : error.message,
             lastSync
         };
     }
@@ -824,13 +827,85 @@ async function getSessionCookie({
     return cookie;
 }
 
+async function resolveSessionCookie({
+    baseUrl,
+    adminToken = null,
+    loadIfMissing,
+    preferredContext = null
+}) {
+    const initialCandidates = await listSessionCookieCandidates({ preferredContext });
+    const initialResolution = adminToken
+        ? await pickUsableSessionCookie(initialCandidates, {
+            baseUrl,
+            adminToken
+        })
+        : {
+            cookie: initialCandidates[0] || null,
+            derivedAccount: null,
+            invalidCandidates: []
+        };
+
+    if (initialResolution.cookie || !loadIfMissing) {
+        return initialResolution;
+    }
+
+    const wakeupStoreIds = await collectSessionWakeupStoreIds(preferredContext);
+    const tabs = await openLabsWakeupTabs(wakeupStoreIds);
+
+    try {
+        await Promise.allSettled(tabs.map((tab) => waitForTabLoad(tab.id)));
+        const wokenCandidates = (await waitForSessionCookieCandidates({
+            preferredContext,
+            excludeIdentities: new Set(initialResolution.invalidCandidates)
+        })) || [];
+        const wakeResolution = adminToken
+            ? await pickUsableSessionCookie(wokenCandidates, {
+                baseUrl,
+                adminToken
+            })
+            : {
+                cookie: wokenCandidates[0] || null,
+                derivedAccount: null,
+                invalidCandidates: []
+            };
+
+        if (wakeResolution.cookie) {
+            return wakeResolution;
+        }
+    } finally {
+        await Promise.allSettled(tabs.map((tab) => closeTabIfNeeded(tab.id)));
+    }
+
+    return initialResolution;
+}
+
 async function findSessionCookie({
     logIfMissing = true,
     preferredContext = null
 } = {}) {
+    const candidates = await listSessionCookieCandidates({ preferredContext });
+    const preferred = candidates[0] || null;
+
+    if (!preferred && logIfMissing) {
+        const storeIds = await collectCandidateCookieStoreIds();
+        await Logger.info('Google Labs session cookie not found', {
+            storeIds,
+            checkedVariants: buildSessionCookieQueries(storeIds).length,
+            preferredStoreId: preferredContext?.storeId || null
+        });
+    }
+
+    return preferred;
+}
+
+async function listSessionCookieCandidates({
+    preferredContext = null,
+    excludeIdentities = null
+} = {}) {
     const storeIds = await collectCandidateCookieStoreIds();
     const candidates = [];
     const seen = new Set();
+    const excluded = excludeIdentities instanceof Set ? excludeIdentities : null;
 
     for (const details of buildSessionCookieQueries(storeIds)) {
         const cookies = await safeGetAllCookies(details);
@@ -841,7 +916,7 @@ async function findSessionCookie({
             }
 
             const key = serializeCookieIdentity(cookie);
-            if (seen.has(key)) {
+            if (seen.has(key) || (excluded && excluded.has(key))) {
                 continue;
             }
 
@@ -850,17 +925,9 @@ async function findSessionCookie({
         }
     }
 
-    const preferred = pickPreferredSessionCookie(candidates, preferredContext);
-
-    if (!preferred && logIfMissing) {
-        await Logger.info('Google Labs session cookie not found', {
-            storeIds,
-            checkedVariants: buildSessionCookieQueries(storeIds).length,
-            preferredStoreId: preferredContext?.storeId || null
-        });
-    }
-
-    return preferred;
+    return [...candidates]
+        .sort((left, right) => compareSessionCookies(left, right, preferredContext))
+        .filter((cookie) => cookie?.value);
 }
 
 async function openLabsTab({ cookieStoreId = null } = {}) {
@@ -1063,7 +1130,7 @@ async function refreshSafetyAlarm({
             scheduleCandidates.push(heuristicProbeAt);
         }
 
-        if (!currentCookie && scopedSettings.lastSync?.status === 'waiting_session') {
+        if (scopedSettings.lastSync?.status === 'waiting_session') {
             scheduleCandidates.push(now + WAITING_RETRY_MINUTES * 60 * 1000);
         }
 
@@ -1206,6 +1273,23 @@ async function waitForSessionCookieDiscovery({
     });
 }
 
+async function waitForSessionCookieCandidates({
+    timeoutMs = SESSION_DISCOVERY_TIMEOUT_MS,
+    preferredContext = null,
+    excludeIdentities = null
+} = {}) {
+    return waitForValue(async () => {
+        const candidates = await listSessionCookieCandidates({
+            preferredContext,
+            excludeIdentities
+        });
+        return candidates.length > 0 ? candidates : null;
+    }, {
+        timeoutMs,
+        intervalMs: SESSION_DISCOVERY_INTERVAL_MS
+    });
+}
+
 async function waitForAdminSessionInTab(tabId, timeoutMs = CONSOLE_DISCOVERY_TIMEOUT_MS) {
     return waitForValue(async () => {
         const probe = await probeFlow2ApiTab(tabId);
@@ -1238,6 +1322,78 @@ function pickPreferredSessionCookie(cookies, preferredContext = null) {
         .find((cookie) => cookie?.value) || null;
 }
 
+async function pickUsableSessionCookie(candidates, {
+    baseUrl,
+    adminToken
+}) {
+    const invalidCandidates = [];
+
+    for (const candidate of Array.isArray(candidates) ? candidates : []) {
+        const validation = await validateSessionCookieCandidate(candidate, {
+            baseUrl,
+            adminToken
+        });
+
+        if (validation.success) {
+            return {
+                cookie: candidate,
+                derivedAccount: validation.derivedAccount,
+                invalidCandidates
+            };
+        }
+
+        if (validation.reason === 'invalid_session') {
+            invalidCandidates.push(serializeCookieIdentity(candidate));
+            await Logger.info('Ignoring stale Google Labs session cookie', {
+                cookieStoreId: normalizeCookieStoreId(candidate.storeId) || null,
+                sessionExpiresAt: formatCookieExpiry(candidate),
+                reason: validation.error.message
+            });
+            continue;
+        }
+
+        return {
+            cookie: candidate,
+            derivedAccount: null,
+            invalidCandidates
+        };
+    }
+
+    return {
+        cookie: null,
+        derivedAccount: null,
+        invalidCandidates
+    };
+}
+
+async function validateSessionCookieCandidate(cookie, {
+    baseUrl,
+    adminToken
+}) {
+    if (!cookie?.value || !adminToken) {
+        return {
+            success: false,
+            reason: 'validation_unavailable',
+            derivedAccount: null
+        };
+    }
+
+    try {
+        return {
+            success: true,
+            reason: 'valid',
+            derivedAccount: await convertSessionToken(baseUrl, adminToken, cookie.value)
+        };
+    } catch (error) {
+        return {
+            success: false,
+            reason: isInvalidSessionTokenError(error) ? 'invalid_session' : 'validation_unavailable',
+            error,
+            derivedAccount: null
+        };
+    }
+}
+
 function compareSessionCookies(left, right, preferredContext) {
     const contextDelta = scoreSessionContextMatch(right, preferredContext) - scoreSessionContextMatch(left, preferredContext);
     if (contextDelta !== 0) {
@@ -1245,6 +1401,19 @@ function compareSessionCookies(left, right, preferredContext) {
     }
 
     return scoreSessionCookie(right) - scoreSessionCookie(left);
+}
+
+function isInvalidSessionTokenError(error) {
+    const message = `${error && error.message ? error.message : error || ''}`.toLowerCase();
+    return /\b(400|401|403)\b/.test(message)
+        || message.includes('expired')
+        || message.includes('invalid')
+        || message.includes('unauthorized')
+        || message.includes('forbidden')
+        || message.includes('过期')
+        || message.includes('失效')
+        || message.includes('无效')
+        || message.includes('未授权');
 }
 
 function scoreSessionContextMatch(cookie, preferredContext) {
@@ -2158,7 +2327,26 @@ function isMissingLabsSessionError(errorOrMessage) {
         && message.includes('未找到');
 }
 
-function createWaitingSessionState(previousLastSync, reason) {
+function isWaitingSessionError(errorOrMessage) {
+    return isMissingLabsSessionError(errorOrMessage)
+        || errorOrMessage?.message === PRESERVE_EXISTING_TOKEN_MESSAGE
+        || errorOrMessage === PRESERVE_EXISTING_TOKEN_MESSAGE;
+}
+
+function shouldPreserveExistingToken(previousLastSync, reason) {
+    if (reason === 'manual_sync' || reason === 'manual_connect') {
+        return false;
+    }
+
+    if (previousLastSync?.status !== 'success') {
+        return false;
+    }
+
+    const knownExpiryMs = parseDateSafe(previousLastSync.atExpires);
+    return Number.isFinite(knownExpiryMs) && knownExpiryMs > Date.now() + ACCESS_TOKEN_MINIMUM_REFRESH_MS;
+}
+
+function createWaitingSessionState(previousLastSync, reason, message = WAITING_FOR_LABS_MESSAGE) {
     return {
         status: 'waiting_session',
         reason,
@@ -2168,7 +2356,7 @@ function createWaitingSessionState(previousLastSync, reason) {
         atExpires: previousLastSync?.atExpires || null,
         sessionExpiresAt: previousLastSync?.sessionExpiresAt || null,
         action: null,
-        message: WAITING_FOR_LABS_MESSAGE
+        message
     };
 }
 

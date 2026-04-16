@@ -732,6 +732,128 @@ async function testPreferredSessionContextCanWakeSpecificStore() {
     assert.equal(updateCall.body.session_token, 'preferred-store-session');
 }
 
+async function testInvalidStaleCookieTriggersWakeupAndFallbackToFreshSession() {
+    const cookies = [{
+        name: SESSION_COOKIE_NAME,
+        value: 'stale-session-token',
+        domain: 'labs.google',
+        path: '/',
+        storeId: 'default',
+        firstPartyDomain: null,
+        expirationDate: 1797000000
+    }];
+
+    const harness = createHarness({
+        cookies,
+        onCreateTab(details) {
+            if (details.url === FLOW2API_MANAGE_URL) {
+                return {
+                    mockAdminToken: 'admin-token'
+                };
+            }
+
+            if (details.url === LABS_URL) {
+                cookies.push({
+                    name: SESSION_COOKIE_NAME,
+                    value: 'fresh-session-token',
+                    domain: 'labs.google',
+                    path: '/',
+                    storeId: details.cookieStoreId || 'default',
+                    firstPartyDomain: null,
+                    expirationDate: 1796054400
+                });
+            }
+
+            return null;
+        },
+        fetchHandler({ requestUrl, method, authHeader, body, createMockResponse }) {
+            if (requestUrl.pathname === '/api/tokens/st2at' && method === 'POST' && authHeader === 'Bearer admin-token') {
+                if (body.st === 'stale-session-token') {
+                    return createMockResponse(401, {
+                        message: 'session token expired'
+                    });
+                }
+
+                if (body.st === 'fresh-session-token') {
+                    return createMockResponse(200, {
+                        success: true,
+                        email: 'fresh@example.com',
+                        expires: '2026-04-30T00:00:00.000Z'
+                    });
+                }
+            }
+
+            return null;
+        }
+    });
+
+    const background = loadBackground(harness);
+    await harness.localStorageArea.set({
+        baseUrl: FLOW2API_ORIGIN,
+        connectionToken: 'connection-token'
+    });
+
+    const result = await background.syncCurrentSession({
+        reason: 'scheduled_check',
+        allowLabsWakeup: true,
+        allowConsoleWakeup: true,
+        notifyOnError: false
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.lastSync.email, 'fresh@example.com');
+
+    const updateCalls = harness.apiCalls.filter((call) => call.url.endsWith('/api/plugin/update-token'));
+    assert.equal(updateCalls.length, 1, 'only the fresh session token should be pushed');
+    assert.equal(updateCalls[0].body.session_token, 'fresh-session-token');
+}
+
+async function testKeepsExistingTokenWhenCookieCannotBeValidated() {
+    const harness = createHarness({
+        cookies: [{
+            name: SESSION_COOKIE_NAME,
+            value: 'unverified-session-token',
+            domain: 'labs.google',
+            path: '/',
+            storeId: 'default',
+            firstPartyDomain: null,
+            expirationDate: 1797000000
+        }]
+    });
+
+    const background = loadBackground(harness);
+    await harness.localStorageArea.set({
+        baseUrl: FLOW2API_ORIGIN,
+        connectionToken: 'connection-token',
+        lastSyncByStore: {
+            __default__: {
+                status: 'success',
+                reason: 'scheduled_check',
+                syncedAt: '2026-01-01T00:00:00.000Z',
+                email: 'known@example.com',
+                atExpires: '2026-01-01T08:00:00.000Z',
+                sessionExpiresAt: '2026-11-30T16:00:00.000Z',
+                action: 'updated',
+                message: '同步成功'
+            }
+        }
+    });
+
+    const result = await background.syncCurrentSession({
+        reason: 'scheduled_check',
+        allowLabsWakeup: true,
+        allowConsoleWakeup: true,
+        notifyOnError: false
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.lastSync.status, 'waiting_session');
+    assert.match(result.lastSync.message, /保留现有 token/);
+
+    const updateCalls = harness.apiCalls.filter((call) => call.url.endsWith('/api/plugin/update-token'));
+    assert.equal(updateCalls.length, 0, 'unverified cookies should not overwrite an existing valid token');
+}
+
 async function testStaleConnectionTokenCanRecoverFromConsole() {
     const harness = createHarness({
         cookies: [{
@@ -956,6 +1078,8 @@ async function main() {
         ['caps safety sync to six hours when admin expiry metadata is unavailable', testPerProfileConfigFallsBackToSixHourSafetySyncWithoutAdminSession],
         ['silently wakes Flow2API console to recover expiry metadata for known connections', testKnownConnectionCanSilentlyWakeConsoleForExpiryMetadata],
         ['wakes the previously successful Labs cookie store before falling back to other stores', testPreferredSessionContextCanWakeSpecificStore],
+        ['ignores stale Labs cookies and wakes a fresh session before syncing', testInvalidStaleCookieTriggersWakeupAndFallbackToFreshSession],
+        ['preserves the current token when a Labs cookie cannot be validated yet', testKeepsExistingTokenWhenCookieCannotBeValidated],
         ['recovers from a stale Flow2API connection token by rehydrating from the console', testStaleConnectionTokenCanRecoverFromConsole],
         ['ignores Labs cookie removals that do not belong to the preferred session context', testUnrelatedCookieRemovalDoesNotHijackPreferredSessionContext],
         ['silently hydrates Flow2API and Labs sessions during startup', testStartupCanSilentlyHydrateAndSync],
