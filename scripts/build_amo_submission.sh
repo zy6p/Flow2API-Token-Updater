@@ -45,7 +45,7 @@ for pattern in "${IGNORE_FILES[@]}"; do
 done
 
 mkdir -p "${ARTIFACTS_DIR}"
-"${ROOT_DIR}/scripts/prepare_gecko_source.sh" "${STAGE_DIR}"
+AMO_LISTED_REVIEW_MODE=1 "${ROOT_DIR}/scripts/prepare_gecko_source.sh" "${STAGE_DIR}"
 
 npx --yes web-ext build \
   --source-dir "${STAGE_DIR}" \

@@ -13,7 +13,9 @@ This extension is designed for users who run their own Flow2API service.
 - It reads cookies from `https://labs.google/` only.
 - It looks for the `__Secure-next-auth.session-token` cookie only.
 - After the user enters a Flow2API address and grants site access, the extension may read the local admin session state from the user's already logged-in Flow2API console in the same browser in order to auto-discover the plugin connection token.
+- The AMO listed package does not request install-time access to all websites. Its install-time host permission is limited to `https://labs.google/*`; access to the user-entered Flow2API origin is requested at runtime through optional host permissions only when the user connects a site.
 - If the browser still has a reusable login but the related page is not open, the extension may silently open `https://labs.google/` or the user's Flow2API `/manage` page in a background tab to rediscover that session, then close the temporary tab.
+- When probing for a reusable Flow2API console login, the extension only checks tabs on the user-entered origin whose path starts with `/manage` or `/login`, or it opens `/manage` itself.
 - The extracted token is sent only to the user's own Flow2API endpoint at `/api/plugin/update-token`.
 - The extension remembers the last successful Labs cookie context for the current profile and prefers that same cookie store / container during later background recovery, to avoid mixing sessions inside one Firefox-based profile.
 - If the previously discovered plugin connection token is rejected but the browser still has a reusable Flow2API console login, the extension may silently reopen the user's own `/manage` page in a background tab, rediscover the plugin connection token, and retry exactly once.
@@ -37,7 +39,7 @@ export AMO_API_SECRET='your-amo-jwt-secret'
 ./scripts/sign_amo_listed.sh
 ```
 
-This listed release script talks to the AMO V5 API directly instead of relying on `web-ext sign`, because the direct API flow has been more reliable for this add-on.
+This listed release script talks to the AMO V5 API directly instead of relying on `web-ext sign`, because the direct API flow has been more reliable for this add-on. The listed build is created with `AMO_LISTED_REVIEW_MODE=1`, which narrows install-time host permissions and moves Flow2API site access to runtime optional host permissions.
 
 Submit an unlisted AMO signing request for self-distribution and download the signed auto-update XPI:
 

@@ -1299,23 +1299,30 @@ async function findConsoleTabs(baseUrl, preferredCookieStoreId = null) {
         const tabs = await extensionApi.tabs.query({});
 
         return tabs
-            .filter((tab) => {
-                if (!tab.url) {
-                    return false;
-                }
-
-                try {
-                    return new URL(tab.url).origin === baseUrl;
-                } catch (error) {
-                    return false;
-                }
-            })
+            .filter((tab) => isFlow2ApiConsoleUrl(tab.url, baseUrl))
             .sort((left, right) => scoreConsoleTab(right, preferredCookieStoreId) - scoreConsoleTab(left, preferredCookieStoreId));
     } catch (error) {
         await Logger.info('Failed to enumerate Flow2API tabs', {
             error: error.message
         });
         return [];
+    }
+}
+
+function isFlow2ApiConsoleUrl(rawUrl, baseUrl) {
+    if (!rawUrl) {
+        return false;
+    }
+
+    try {
+        const url = new URL(rawUrl);
+        if (url.origin !== baseUrl) {
+            return false;
+        }
+
+        return url.pathname.startsWith('/manage') || url.pathname.startsWith('/login');
+    } catch (error) {
+        return false;
     }
 }
 
@@ -1341,7 +1348,10 @@ function scoreConsoleTab(tab, preferredCookieStoreId = null) {
 }
 
 async function probeFlow2ApiTab(tabId) {
-    const result = await executeInTab(tabId, function probePageContext() {
+    let result;
+
+    try {
+        result = await executeInTab(tabId, function probePageContext() {
         const directResult = {
             href: location.href,
             origin: location.origin,
@@ -1422,8 +1432,24 @@ async function probeFlow2ApiTab(tabId) {
             script.remove();
         });
     });
+    } catch (error) {
+        if (isMissingHostPermissionError(error)) {
+            await Logger.info('Flow2API tab probe skipped because host permission is missing', {
+                tabId,
+                error: error.message
+            });
+            return null;
+        }
+
+        throw error;
+    }
 
     return result || null;
+}
+
+function isMissingHostPermissionError(error) {
+    const message = `${error && error.message ? error.message : error || ''}`;
+    return /Missing host permission for the tab/i.test(message);
 }
 
 async function executeInTab(tabId, func) {

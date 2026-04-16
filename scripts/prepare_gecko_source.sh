@@ -12,7 +12,7 @@ for path in   background.js   icon128.png   icon16.png   icon48.png   logs.html 
   cp "${ROOT_DIR}/${path}" "${TARGET_DIR}/${path}"
  done
 
-ROOT_DIR="${ROOT_DIR}" TARGET_DIR="${TARGET_DIR}" GECKO_UPDATE_URL="${GECKO_UPDATE_URL:-}" GECKO_VERSION_OVERRIDE="${GECKO_VERSION_OVERRIDE:-}" node <<'EOF'
+ROOT_DIR="${ROOT_DIR}" TARGET_DIR="${TARGET_DIR}" GECKO_UPDATE_URL="${GECKO_UPDATE_URL:-}" GECKO_VERSION_OVERRIDE="${GECKO_VERSION_OVERRIDE:-}" AMO_LISTED_REVIEW_MODE="${AMO_LISTED_REVIEW_MODE:-}" node <<'EOF'
 const fs = require('fs');
 const path = require('path');
 
@@ -20,6 +20,7 @@ const rootDir = process.env.ROOT_DIR;
 const targetDir = process.env.TARGET_DIR;
 const updateUrl = `${process.env.GECKO_UPDATE_URL || ''}`.trim();
 const versionOverride = `${process.env.GECKO_VERSION_OVERRIDE || ''}`.trim();
+const amoListedReviewMode = `${process.env.AMO_LISTED_REVIEW_MODE || ''}`.trim() === '1';
 const manifestPath = path.join(rootDir, 'manifest.json');
 const outputPath = path.join(targetDir, 'manifest.json');
 
@@ -35,6 +36,11 @@ manifest.background = background;
 
 if (versionOverride) {
   manifest.version = versionOverride;
+}
+
+if (amoListedReviewMode) {
+  manifest.host_permissions = ['https://labs.google/*'];
+  manifest.optional_host_permissions = ['http://*/*', 'https://*/*'];
 }
 
 if (!manifest.browser_specific_settings || typeof manifest.browser_specific_settings !== 'object') {
