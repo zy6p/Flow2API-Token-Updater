@@ -80,16 +80,28 @@ function zipDirectory(stageDir, outputFile) {
 }
 
 async function submitOrFetchExisting(filePath, version) {
+    const statusUrl = signingStatusUrl(version);
+
     try {
-        const response = await signingPut(signingStatusUrl(version), filePath);
+        const existing = await signingGet(statusUrl);
+        console.log(`Found existing self-hosted signing request for ${version}`);
+        return existing;
+    } catch (error) {
+        if (!error.message.includes('(404)')) {
+            throw error;
+        }
+    }
+
+    try {
+        const response = await signingPut(statusUrl, filePath);
         console.log(`Submitted self-hosted signing request for ${version}`);
         return response;
     } catch (error) {
-        if (!error.message.includes('(409)')) {
+        if (!error.message.includes('(409)') && !error.message.includes('(429)')) {
             throw error;
         }
 
-        const existing = await signingGet(signingStatusUrl(version));
+        const existing = await signingGet(statusUrl);
         console.log(`Self-hosted signing request for ${version} already exists`);
         return existing;
     }
