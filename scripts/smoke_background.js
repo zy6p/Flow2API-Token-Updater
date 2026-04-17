@@ -687,6 +687,153 @@ async function testStoreScopedConnectionConfigStaysSeparated() {
     );
 }
 
+async function testSetupDataPrefersCurrentSessionHistoryOverStaleStoreRecord() {
+    const harness = createHarness({
+        cookies: [{
+            name: SESSION_COOKIE_NAME,
+            value: 'profile-b-session',
+            domain: 'labs.google',
+            path: '/',
+            storeId: 'default',
+            firstPartyDomain: null,
+            expirationDate: 1796054400
+        }]
+    });
+
+    const background = loadBackground(harness);
+    const staleFingerprint = background.fingerprintSessionToken('profile-a-session');
+    const currentFingerprint = background.fingerprintSessionToken('profile-b-session');
+
+    await harness.localStorageArea.set({
+        configByStore: {
+            default: {
+                baseUrl: FLOW2API_ORIGIN,
+                connectionToken: 'connection-token'
+            }
+        },
+        lastSyncByStore: {
+            default: {
+                status: 'success',
+                reason: 'manual_sync',
+                syncedAt: '2026-01-01T00:00:00.000Z',
+                email: 'profile-a@example.com',
+                atExpires: '2026-04-30T00:00:00.000Z',
+                sessionExpiresAt: '2026-11-30T16:00:00.000Z',
+                sessionFingerprint: staleFingerprint,
+                action: 'updated',
+                message: '同步成功'
+            }
+        },
+        lastSyncBySession: {
+            [staleFingerprint]: {
+                status: 'success',
+                reason: 'manual_sync',
+                syncedAt: '2026-01-01T00:00:00.000Z',
+                email: 'profile-a@example.com',
+                atExpires: '2026-04-30T00:00:00.000Z',
+                sessionExpiresAt: '2026-11-30T16:00:00.000Z',
+                sessionFingerprint: staleFingerprint,
+                action: 'updated',
+                message: '同步成功'
+            },
+            [currentFingerprint]: {
+                status: 'success',
+                reason: 'manual_sync',
+                syncedAt: '2026-01-02T00:00:00.000Z',
+                email: 'profile-b@example.com',
+                atExpires: '2026-05-01T00:00:00.000Z',
+                sessionExpiresAt: '2026-11-30T16:00:00.000Z',
+                sessionFingerprint: currentFingerprint,
+                action: 'updated',
+                message: '同步成功'
+            }
+        }
+    });
+
+    const setup = await background.getSetupData('default');
+    assert.equal(setup.success, true);
+    assert.equal(setup.settings.lastSync.email, 'profile-b@example.com');
+    assert.equal(setup.settings.lastSync.sessionFingerprint, currentFingerprint);
+}
+
+async function testSetupDataDetectsUnsyncedCurrentSessionInsteadOfShowingStaleAccount() {
+    const harness = createHarness({
+        tabs: [{
+            id: 1,
+            windowId: 1,
+            active: true,
+            status: 'complete',
+            url: FLOW2API_MANAGE_URL,
+            cookieStoreId: 'default',
+            mockAdminToken: 'admin-token'
+        }],
+        cookies: [{
+            name: SESSION_COOKIE_NAME,
+            value: 'profile-b-session',
+            domain: 'labs.google',
+            path: '/',
+            storeId: 'default',
+            firstPartyDomain: null,
+            expirationDate: 1796054400
+        }],
+        fetchHandler({ requestUrl, method, authHeader, body, createMockResponse }) {
+            if (requestUrl.pathname === '/api/tokens/st2at' && method === 'POST' && authHeader === 'Bearer admin-token') {
+                return createMockResponse(200, {
+                    success: true,
+                    email: body.st === 'profile-b-session' ? 'profile-b@example.com' : 'profile-a@example.com',
+                    expires: '2026-05-01T00:00:00.000Z'
+                });
+            }
+
+            return null;
+        }
+    });
+
+    const background = loadBackground(harness);
+    const staleFingerprint = background.fingerprintSessionToken('profile-a-session');
+
+    await harness.localStorageArea.set({
+        configByStore: {
+            default: {
+                baseUrl: FLOW2API_ORIGIN,
+                connectionToken: 'connection-token'
+            }
+        },
+        lastSyncByStore: {
+            default: {
+                status: 'success',
+                reason: 'manual_sync',
+                syncedAt: '2026-01-01T00:00:00.000Z',
+                email: 'profile-a@example.com',
+                atExpires: '2026-04-30T00:00:00.000Z',
+                sessionExpiresAt: '2026-11-30T16:00:00.000Z',
+                sessionFingerprint: staleFingerprint,
+                action: 'updated',
+                message: '同步成功'
+            }
+        },
+        lastSyncBySession: {
+            [staleFingerprint]: {
+                status: 'success',
+                reason: 'manual_sync',
+                syncedAt: '2026-01-01T00:00:00.000Z',
+                email: 'profile-a@example.com',
+                atExpires: '2026-04-30T00:00:00.000Z',
+                sessionExpiresAt: '2026-11-30T16:00:00.000Z',
+                sessionFingerprint: staleFingerprint,
+                action: 'updated',
+                message: '同步成功'
+            }
+        }
+    });
+
+    const setup = await background.getSetupData('default');
+    assert.equal(setup.success, true);
+    assert.equal(setup.settings.lastSync.status, 'detected_session');
+    assert.equal(setup.settings.lastSync.email, 'profile-b@example.com');
+    assert.equal(setup.settings.lastSync.email === 'profile-a@example.com', false);
+}
+
 async function testFreshProfileIgnoresLegacySharedConfig() {
     const harness = createHarness({
         syncState: {
@@ -1203,6 +1350,8 @@ async function main() {
         ['syncs using a Labs cookie found in a non-default Firefox store', testSyncFindsCookieOutsideDefaultStore],
         ['keeps setup data isolated per Firefox cookie store', testStoreScopedSetupDataStaysSeparated],
         ['keeps Flow2API connection config isolated per Firefox cookie store', testStoreScopedConnectionConfigStaysSeparated],
+        ['prefers the current Labs session history over a stale shared store record', testSetupDataPrefersCurrentSessionHistoryOverStaleStoreRecord],
+        ['detects an unsynced current Labs session instead of showing a stale account', testSetupDataDetectsUnsyncedCurrentSessionInsteadOfShowingStaleAccount],
         ['ignores legacy shared config when a fresh profile starts', testFreshProfileIgnoresLegacySharedConfig],
         ['caps safety sync to six hours when admin expiry metadata is unavailable', testPerProfileConfigFallsBackToSixHourSafetySyncWithoutAdminSession],
         ['silently wakes Flow2API console to recover expiry metadata for known connections', testKnownConnectionCanSilentlyWakeConsoleForExpiryMetadata],

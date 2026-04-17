@@ -47,6 +47,8 @@ async function loadSetupData() {
 
         if (state.lastSync?.status === 'success') {
             showStatus('这个 Profile 已经就绪。', 'success');
+        } else if (state.lastSync?.status === 'detected_session') {
+            showStatus(state.lastSync.message || '检测到当前账号，点一下就可以同步这个账号。', 'info');
         } else if (state.lastSync?.status === 'error') {
             showStatus(state.lastSync.message || '这次同步没有完成。', 'error');
         } else if (state.lastSync?.status === 'waiting_session' || state.hasConnection) {
@@ -164,6 +166,17 @@ function getUiModel() {
             text: 'Google Labs 登录态有变化时，扩展会自动同步到 Flow2API。你通常不需要手动操作。',
             actionLabel: '立即重新同步',
             actionNote: '只有在你刚切换 Labs 账号，或者想立刻刷新时，才需要点这一下。'
+        };
+    }
+
+    if (lastSync?.status === 'detected_session') {
+        return {
+            title: '检测到当前账号',
+            text: lastSync.email
+                ? '这个账号已经在当前页面里识别到了，但还没有把它对应到这次同步记录。'
+                : '当前页面里的 Google Labs 会话已经识别到，点一下就会立即把这个账号同步到 Flow2API。',
+            actionLabel: '同步这个账号',
+            actionNote: '这一步只会同步你当前这个页面里的账号，不会沿用别的账号缓存。'
         };
     }
 

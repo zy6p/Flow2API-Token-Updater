@@ -18,6 +18,7 @@ const LEGACY_SYNC_CONFIG_KEYS = [
 const DEFAULT_STORE_KEY = '__default__';
 const CONFIG_BY_STORE_KEY = 'configByStore';
 const LAST_SYNC_BY_STORE_KEY = 'lastSyncByStore';
+const LAST_SYNC_BY_SESSION_KEY = 'lastSyncBySession';
 const SESSION_CONTEXT_BY_STORE_KEY = 'sessionContextByStore';
 const CONSOLE_CONTEXT_BY_STORE_KEY = 'consoleContextByStore';
 const UNSET_VALUE = Symbol('unsetValue');
@@ -194,10 +195,21 @@ async function getSetupData(cookieStoreId = null) {
     }
 
     const hydratedSettings = await loadSettings({ cookieStoreId });
+    const currentSessionState = await detectCurrentSessionState({
+        cookieStoreId,
+        settings: hydratedSettings
+    });
+    const effectiveLastSync = selectDisplayedLastSync(
+        hydratedSettings.lastSync,
+        currentSessionState
+    );
 
     return {
         success: true,
-        settings: hydratedSettings,
+        settings: {
+            ...hydratedSettings,
+            lastSync: effectiveLastSync
+        },
         hasConnection: Boolean(hydratedSettings.connectionToken),
         browserInfo: await getBrowserInfoSafe(),
         suggestedBaseUrl
@@ -471,6 +483,7 @@ async function performSync({
             email,
             atExpires,
             sessionExpiresAt,
+            sessionFingerprint: fingerprintSessionToken(sessionCookie.value),
             action: syncPayload.action || null,
             message: syncPayload.message || '同步成功'
         };
@@ -479,6 +492,7 @@ async function performSync({
             lastSync,
             sessionContext
         });
+        await saveSessionScopedLastSync(lastSync);
         await refreshSafetyAlarm({
             cookie: sessionCookie,
             atExpires,
@@ -511,11 +525,13 @@ async function performSync({
                 email: settings.lastSync?.email || null,
                 atExpires: settings.lastSync?.atExpires || null,
                 sessionExpiresAt: settings.lastSync?.sessionExpiresAt || null,
+                sessionFingerprint: settings.lastSync?.sessionFingerprint || null,
                 action: null,
                 message: error.message
             };
 
         await saveScopedSettings(cookieStoreId, { lastSync });
+        await saveSessionScopedLastSync(lastSync);
         await (waitingForSession ? Logger.info : Logger.error).call(Logger, waitingForSession ? 'Waiting for Google Labs session' : 'Session sync failed', {
             reason,
             error: error.message,
@@ -1841,6 +1857,14 @@ async function loadStoreScopedState() {
     };
 }
 
+async function loadSessionScopedLastSyncMap() {
+    const stored = await extensionApi.storage.local.get([
+        LAST_SYNC_BY_SESSION_KEY
+    ]);
+
+    return normalizeSessionScopedMap(stored[LAST_SYNC_BY_SESSION_KEY], normalizeLastSyncValue);
+}
+
 function normalizeStoreScopedMap(value, normalizer) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         return {};
@@ -1853,8 +1877,155 @@ function normalizeStoreScopedMap(value, normalizer) {
     );
 }
 
+function normalizeSessionScopedMap(value, normalizer) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {};
+    }
+
+    return Object.fromEntries(
+        Object.entries(value)
+            .map(([sessionFingerprint, entry]) => [normalizeSessionFingerprint(sessionFingerprint), normalizer(entry)])
+            .filter(([sessionFingerprint, entry]) => Boolean(sessionFingerprint && entry))
+    );
+}
+
 function normalizeLastSyncValue(value) {
     return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+}
+
+function normalizeSessionFingerprint(value) {
+    return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function fingerprintSessionToken(sessionToken) {
+    if (typeof sessionToken !== 'string' || !sessionToken) {
+        return '';
+    }
+
+    let hash = 2166136261;
+    for (let index = 0; index < sessionToken.length; index += 1) {
+        hash ^= sessionToken.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+    }
+
+    return `st_${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+async function saveSessionScopedLastSync(lastSync) {
+    const normalizedLastSync = normalizeLastSyncValue(lastSync);
+    const sessionFingerprint = normalizeSessionFingerprint(normalizedLastSync?.sessionFingerprint);
+    if (!normalizedLastSync || !sessionFingerprint) {
+        return;
+    }
+
+    const lastSyncBySession = await loadSessionScopedLastSyncMap();
+    lastSyncBySession[sessionFingerprint] = normalizedLastSync;
+
+    await extensionApi.storage.local.set({
+        [LAST_SYNC_BY_SESSION_KEY]: lastSyncBySession
+    });
+}
+
+function selectDisplayedLastSync(storedLastSync, currentSessionState) {
+    if (!currentSessionState?.sessionFingerprint) {
+        return storedLastSync;
+    }
+
+    if (currentSessionState.lastSync) {
+        return currentSessionState.lastSync;
+    }
+
+    if (storedLastSync?.sessionFingerprint === currentSessionState.sessionFingerprint) {
+        return storedLastSync;
+    }
+
+    return currentSessionState.previewLastSync || null;
+}
+
+async function detectCurrentSessionState({
+    cookieStoreId = null,
+    settings = null
+} = {}) {
+    const effectiveSettings = settings || await loadSettings({ cookieStoreId });
+    const preferredContext = effectiveSettings.sessionContext || buildStoreSessionPreference(cookieStoreId);
+
+    let sessionCookie = await findSessionCookie({
+        preferredContext,
+        logIfMissing: false
+    });
+
+    if (!sessionCookie && preferredContext) {
+        sessionCookie = await findSessionCookie({
+            preferredContext: null,
+            logIfMissing: false
+        });
+    }
+
+    const sessionFingerprint = fingerprintSessionToken(sessionCookie?.value || '');
+    if (!sessionCookie?.value || !sessionFingerprint) {
+        return {
+            sessionFingerprint: '',
+            lastSync: null,
+            previewLastSync: null
+        };
+    }
+
+    const lastSyncBySession = await loadSessionScopedLastSyncMap();
+    const sessionLastSync = lastSyncBySession[sessionFingerprint] || null;
+    if (sessionLastSync) {
+        return {
+            sessionFingerprint,
+            lastSync: sessionLastSync,
+            previewLastSync: null
+        };
+    }
+
+    let derivedAccount = null;
+    if (effectiveSettings.baseUrl && await hasOriginPermission(effectiveSettings.baseUrl)) {
+        const preferredCookieStoreId = effectiveSettings.consoleContext?.cookieStoreId
+            || normalizeCookieStoreId(cookieStoreId)
+            || effectiveSettings.sessionContext?.storeId
+            || normalizeCookieStoreId(sessionCookie.storeId)
+            || null;
+        const adminSession = await getAdminSessionFromConsole(effectiveSettings.baseUrl, {
+            openIfMissing: false,
+            activateOnNeedsLogin: false,
+            preferredCookieStoreId
+        });
+
+        if (adminSession.success) {
+            try {
+                derivedAccount = await convertSessionToken(
+                    effectiveSettings.baseUrl,
+                    adminSession.adminToken,
+                    sessionCookie.value
+                );
+            } catch (error) {
+                await Logger.info('Current session preview skipped', {
+                    reason: error.message
+                });
+            }
+        }
+    }
+
+    return {
+        sessionFingerprint,
+        lastSync: null,
+        previewLastSync: {
+            status: 'detected_session',
+            reason: 'detected_session',
+            syncedAt: null,
+            checkedAt: new Date().toISOString(),
+            email: derivedAccount?.email || null,
+            atExpires: derivedAccount?.expires || null,
+            sessionExpiresAt: formatCookieExpiry(sessionCookie),
+            sessionFingerprint,
+            action: null,
+            message: derivedAccount?.email
+                ? '检测到当前账号尚未同步，点一下即可把这个账号同步到 Flow2API。'
+                : '检测到当前 Google Labs 会话，点一下即可把这个账号同步到 Flow2API。'
+        }
+    };
 }
 
 function normalizeScopedConfig(value) {
@@ -2499,6 +2670,7 @@ function createWaitingSessionState(previousLastSync, reason, message = WAITING_F
         email: previousLastSync?.email || null,
         atExpires: previousLastSync?.atExpires || null,
         sessionExpiresAt: previousLastSync?.sessionExpiresAt || null,
+        sessionFingerprint: previousLastSync?.sessionFingerprint || null,
         action: null,
         message
     };
