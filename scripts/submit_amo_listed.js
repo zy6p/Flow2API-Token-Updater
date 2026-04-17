@@ -134,13 +134,23 @@ async function updateAddonListing() {
         return;
     }
 
-    const addon = await amoFetch(`${API_BASE}/addons/addon/${ADDON_ID}/`, {
-        method: 'PATCH',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-    });
+    let addon;
+    try {
+        addon = await amoFetch(`${API_BASE}/addons/addon/${ADDON_ID}/`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        });
+    } catch (error) {
+        if (isAmoThrottleError(error)) {
+            console.warn(`AMO throttled listing metadata update for ${ADDON_ID}; continuing without PATCH`);
+            return;
+        }
+
+        throw error;
+    }
 
     console.log(`AMO listing metadata updated for addon ${addon.slug || ADDON_ID}`);
 }
@@ -151,13 +161,22 @@ async function updateAddonEulaPolicy() {
         return;
     }
 
-    await amoFetch(`${API_BASE}/addons/addon/${ADDON_ID}/eula_policy/`, {
-        method: 'PATCH',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-    });
+    try {
+        await amoFetch(`${API_BASE}/addons/addon/${ADDON_ID}/eula_policy/`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        });
+    } catch (error) {
+        if (isAmoThrottleError(error)) {
+            console.warn(`AMO throttled privacy policy update for ${ADDON_ID}; continuing without PATCH`);
+            return;
+        }
+
+        throw error;
+    }
 
     console.log(`AMO privacy policy updated for addon ${ADDON_ID}`);
 }
@@ -271,6 +290,10 @@ function isLocaleMap(value) {
         && typeof value === 'object'
         && !Array.isArray(value)
         && Object.keys(value).length > 0;
+}
+
+function isAmoThrottleError(error) {
+    return /\(429\)/.test(`${error?.message || error || ''}`);
 }
 
 function sleep(ms) {
