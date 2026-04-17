@@ -61,11 +61,15 @@ node scripts/smoke_background.js
 HEAD_SHA="$(git rev-parse HEAD)"
 
 if git rev-parse "${TAG_NAME}" >/dev/null 2>&1; then
-  echo "Tag ${TAG_NAME} already exists locally" >&2
-  exit 1
+  EXISTING_TAG_SHA="$(git rev-list -n 1 "${TAG_NAME}")"
+  if [[ "${EXISTING_TAG_SHA}" != "${HEAD_SHA}" ]]; then
+    echo "Tag ${TAG_NAME} already exists locally at ${EXISTING_TAG_SHA}, not HEAD ${HEAD_SHA}" >&2
+    exit 1
+  fi
+  echo "Reusing existing local tag ${TAG_NAME} at ${HEAD_SHA}"
+else
+  git tag -a "${TAG_NAME}" -m "release: ${TAG_NAME}"
 fi
-
-git tag -a "${TAG_NAME}" -m "release: ${TAG_NAME}"
 
 git push "${ORIGIN_REMOTE}" "${TARGET_BRANCH}"
 if [[ "${SOURCE_BRANCH}" != "${TARGET_BRANCH}" ]]; then

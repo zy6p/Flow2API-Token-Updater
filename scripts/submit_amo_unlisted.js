@@ -173,12 +173,26 @@ async function signingFetch(url, options = {}) {
 
 async function waitForSignedStatus(statusUrl) {
     const startedAt = Date.now();
+    let lastSnapshot = '';
 
     while (true) {
         const current = await signingGet(statusUrl);
         const file = current.files?.[0] || null;
+        const snapshot = JSON.stringify({
+            processed: Boolean(current.processed),
+            valid: Boolean(current.valid),
+            signed: Boolean(file?.signed),
+            reviewed: Boolean(current.reviewed),
+            active: Boolean(current.active),
+            download_url: file?.download_url || ''
+        });
 
-        if (current.processed && current.valid && file?.download_url && file?.signed) {
+        if (snapshot !== lastSnapshot) {
+            console.log(`Self-hosted signing status: ${snapshot}`);
+            lastSnapshot = snapshot;
+        }
+
+        if (current.processed && current.valid && file?.download_url) {
             return current;
         }
 
