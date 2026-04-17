@@ -81,29 +81,42 @@ function zipDirectory(stageDir, outputFile) {
 
 async function submitOrFetchExisting(filePath, version) {
     const statusUrl = signingStatusUrl(version);
+    const deadline = Date.now() + POLL_TIMEOUT_MS;
 
-    try {
-        const existing = await signingGet(statusUrl);
-        console.log(`Found existing self-hosted signing request for ${version}`);
-        return existing;
-    } catch (error) {
-        if (!error.message.includes('(404)')) {
-            throw error;
-        }
-    }
-
-    try {
-        const response = await signingPut(statusUrl, filePath);
-        console.log(`Submitted self-hosted signing request for ${version}`);
-        return response;
-    } catch (error) {
-        if (!error.message.includes('(409)') && !error.message.includes('(429)')) {
-            throw error;
+    while (true) {
+        try {
+            const existing = await signingGet(statusUrl);
+            console.log(`Found existing self-hosted signing request for ${version}`);
+            return existing;
+        } catch (error) {
+            if (!error.message.includes('(404)')) {
+                throw error;
+            }
         }
 
-        const existing = await signingGet(statusUrl);
-        console.log(`Self-hosted signing request for ${version} already exists`);
-        return existing;
+        try {
+            const response = await signingPut(statusUrl, filePath);
+            console.log(`Submitted self-hosted signing request for ${version}`);
+            return response;
+        } catch (error) {
+            if (error.message.includes('(409)')) {
+                const existing = await signingGet(statusUrl);
+                console.log(`Self-hosted signing request for ${version} already exists`);
+                return existing;
+            }
+
+            if (!error.message.includes('(429)')) {
+                throw error;
+            }
+
+            const delayMs = getThrottleDelayMs(error.message, POLL_INTERVAL_MS);
+            if (Date.now() + delayMs > deadline) {
+                throw new Error(`Mozilla signing request stayed throttled too long for ${version}`);
+            }
+
+            console.warn(`Self-hosted signing request throttled for ${version}; retrying in ${Math.ceil(delayMs / 1000)}s`);
+            await sleep(delayMs);
+        }
     }
 }
 
@@ -134,6 +147,20 @@ function createJwt() {
 
 function encodeBase64Url(value) {
     return Buffer.from(value).toString('base64url');
+}
+
+function getThrottleDelayMs(message, fallbackMs) {
+    const match = `${message || ''}`.match(/Expected available in (\d+) seconds?/i);
+    if (!match) {
+        return fallbackMs;
+    }
+
+    const seconds = Number(match[1]);
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+        return fallbackMs;
+    }
+
+    return seconds * 1000;
 }
 
 async function signingGet(url) {
