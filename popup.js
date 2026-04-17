@@ -83,7 +83,7 @@ function renderSummary() {
         : '当前浏览器';
 
     document.getElementById('browserHint').textContent =
-        `${browserName} 里的真实 Profile 彼此隔离；在 Firefox / Zen 里，不同容器 / cookie store 也会分别维护自己的 Flow2API 配置和最近同步状态。扩展只处理当前这个页面所属的 Profile / 容器，不会沿用别的账号。`;
+        `${browserName} 里的真实 Profile 彼此隔离；在 Firefox / Zen 里，不同容器 / cookie store 会分别维护自己的 Labs 会话和最近同步状态，但同一个浏览器里的 Flow2API 连接配置可以复用。扩展只会同步当前这个页面所属的账号。`;
 
     const hasBaseUrl = Boolean(state.baseUrl);
     const hasConnection = Boolean(state.hasConnection);

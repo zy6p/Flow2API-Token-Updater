@@ -1198,6 +1198,10 @@ async function handleLabsSessionRemoved(changeInfo, cookieStoreId = null) {
         cookieStoreId: normalizeCookieStoreId(cookieStoreId) || null
     });
 
+    if (!await hasKnownStoreState(cookieStoreId)) {
+        return;
+    }
+
     const settings = await loadSettings({ cookieStoreId });
     if (!settings.connectionToken) {
         return;
@@ -1805,14 +1809,20 @@ async function loadSettings({ cookieStoreId = null } = {}) {
     const scopedState = await loadStoreScopedState();
     const storeKey = storeKeyFromCookieStoreId(cookieStoreId);
     const scopedConfig = scopedState.configByStore[storeKey] || null;
+    const sharedConfig = scopedConfig
+        ? null
+        : resolveSharedConfigCandidate(scopedState.configByStore);
+    const effectiveConfig = scopedConfig || sharedConfig || null;
 
     return {
-        baseUrl: scopedConfig?.baseUrl || '',
-        connectionToken: scopedConfig?.connectionToken || '',
+        baseUrl: effectiveConfig?.baseUrl || '',
+        connectionToken: effectiveConfig?.connectionToken || '',
         lastSync: scopedState.lastSyncByStore[storeKey] || null,
         sessionContext: scopedState.sessionContextByStore[storeKey] || null,
         consoleContext: scopedState.consoleContextByStore[storeKey] || null,
-        configSource: scopedConfig ? 'local' : 'none'
+        configSource: scopedConfig
+            ? 'local'
+            : (sharedConfig ? 'shared' : 'none')
     };
 }
 
@@ -2056,6 +2066,44 @@ function normalizeScopedConfig(value) {
     };
 }
 
+function serializeScopedConfigIdentity(config) {
+    const normalized = normalizeScopedConfig(config);
+    if (!normalized) {
+        return '';
+    }
+
+    return JSON.stringify([
+        normalized.baseUrl,
+        normalized.connectionToken
+    ]);
+}
+
+function resolveSharedConfigCandidate(configByStore) {
+    if (!configByStore || typeof configByStore !== 'object' || Array.isArray(configByStore)) {
+        return null;
+    }
+
+    const normalizedConfigs = Object.values(configByStore)
+        .map((config) => normalizeScopedConfig(config))
+        .filter((config) => Boolean(config));
+
+    if (normalizedConfigs.length === 0) {
+        return null;
+    }
+
+    const identities = new Set(
+        normalizedConfigs
+            .map((config) => serializeScopedConfigIdentity(config))
+            .filter((identity) => Boolean(identity))
+    );
+
+    if (identities.size !== 1) {
+        return null;
+    }
+
+    return normalizedConfigs[0];
+}
+
 async function saveScopedConfig(cookieStoreId, {
     baseUrl = UNSET_VALUE,
     connectionToken = UNSET_VALUE
@@ -2153,8 +2201,35 @@ async function collectConfiguredCookieStoreIds() {
             .filter(([, config]) => Boolean(config?.baseUrl))
             .map(([storeKey]) => storeKey)
     );
+    const sharedConfig = resolveSharedConfigCandidate(scopedState.configByStore);
+
+    if (sharedConfig?.baseUrl) {
+        for (const storeKey of Object.keys(scopedState.lastSyncByStore)) {
+            storeKeys.add(storeKey);
+        }
+
+        for (const storeKey of Object.keys(scopedState.sessionContextByStore)) {
+            storeKeys.add(storeKey);
+        }
+
+        for (const storeKey of Object.keys(scopedState.consoleContextByStore)) {
+            storeKeys.add(storeKey);
+        }
+    }
 
     return [...storeKeys].map(cookieStoreIdFromStoreKey);
+}
+
+async function hasKnownStoreState(cookieStoreId, scopedState = null) {
+    const effectiveScopedState = scopedState || await loadStoreScopedState();
+    const storeKey = storeKeyFromCookieStoreId(cookieStoreId);
+
+    return Boolean(
+        effectiveScopedState.configByStore[storeKey]?.baseUrl
+        || effectiveScopedState.lastSyncByStore[storeKey]
+        || effectiveScopedState.sessionContextByStore[storeKey]
+        || effectiveScopedState.consoleContextByStore[storeKey]
+    );
 }
 
 async function migrateLegacyConfig() {

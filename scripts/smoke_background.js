@@ -687,6 +687,69 @@ async function testStoreScopedConnectionConfigStaysSeparated() {
     );
 }
 
+async function testSharedConnectionConfigCanBeReusedAcrossStores() {
+    const harness = createHarness({
+        cookies: [{
+            name: SESSION_COOKIE_NAME,
+            value: 'store-3-session',
+            domain: 'labs.google',
+            path: '/',
+            storeId: 'firefox-container-3',
+            firstPartyDomain: null,
+            expirationDate: 1796054400
+        }],
+        fetchHandler({ requestUrl, method, authHeader, createMockResponse }) {
+            if (requestUrl.pathname === '/api/plugin/update-token' && method === 'POST' && authHeader === 'Bearer connection-token') {
+                return createMockResponse(200, {
+                    success: true,
+                    action: 'updated',
+                    message: 'Token updated for store-3-session'
+                });
+            }
+
+            return null;
+        }
+    });
+
+    const background = loadBackground(harness);
+
+    await harness.localStorageArea.set({
+        configByStore: {
+            'firefox-container-1': {
+                baseUrl: FLOW2API_ORIGIN,
+                connectionToken: 'connection-token'
+            }
+        }
+    });
+
+    const setup = await background.handleMessage({
+        action: 'getSetupData',
+        cookieStoreId: 'firefox-container-3'
+    });
+
+    assert.equal(setup.success, true);
+    assert.equal(setup.settings.baseUrl, FLOW2API_ORIGIN);
+    assert.equal(setup.settings.connectionToken, 'connection-token');
+    assert.equal(setup.settings.configSource, 'shared');
+
+    const syncResult = await background.handleMessage({
+        action: 'syncNow',
+        cookieStoreId: 'firefox-container-3'
+    });
+
+    assert.equal(syncResult.success, true);
+    const updateCall = harness.apiCalls.find((call) => call.url.endsWith('/api/plugin/update-token'));
+    assert.ok(updateCall, 'shared Flow2API connection should be reused for cross-store sync');
+    assert.equal(updateCall.authorization, 'Bearer connection-token');
+    assert.equal(updateCall.body.session_token, 'store-3-session');
+
+    const configuredStores = await background.collectConfiguredCookieStoreIds();
+    assert.deepEqual(
+        [...configuredStores].sort(),
+        ['firefox-container-1', 'firefox-container-3'].sort()
+    );
+}
+
 async function testSetupDataPrefersCurrentSessionHistoryOverStaleStoreRecord() {
     const harness = createHarness({
         cookies: [{
@@ -1350,6 +1413,7 @@ async function main() {
         ['syncs using a Labs cookie found in a non-default Firefox store', testSyncFindsCookieOutsideDefaultStore],
         ['keeps setup data isolated per Firefox cookie store', testStoreScopedSetupDataStaysSeparated],
         ['keeps Flow2API connection config isolated per Firefox cookie store', testStoreScopedConnectionConfigStaysSeparated],
+        ['reuses one Flow2API connection config across other Firefox stores', testSharedConnectionConfigCanBeReusedAcrossStores],
         ['prefers the current Labs session history over a stale shared store record', testSetupDataPrefersCurrentSessionHistoryOverStaleStoreRecord],
         ['detects an unsynced current Labs session instead of showing a stale account', testSetupDataDetectsUnsyncedCurrentSessionInsteadOfShowingStaleAccount],
         ['ignores legacy shared config when a fresh profile starts', testFreshProfileIgnoresLegacySharedConfig],
