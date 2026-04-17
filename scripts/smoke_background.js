@@ -468,8 +468,8 @@ async function testSyncFindsCookieOutsideDefaultStore() {
     assert.equal(harness.alarms.length, 1, 'should schedule exactly one safety sync');
     assert.equal(
         new Date(harness.alarms[0].when).toISOString(),
-        '2026-01-01T12:00:00.000Z',
-        'should schedule by access-token expiry when it is earlier than the Labs cookie expiry'
+        '2026-01-01T04:00:00.000Z',
+        'should never wait longer than four hours even if access-token expiry is much later'
     );
     assert.deepEqual(harness.syncStorageArea.dump(), {});
 }
@@ -925,7 +925,7 @@ async function testFreshProfileIgnoresLegacySharedConfig() {
     assert.match(result.error, /Flow2API 地址/);
 }
 
-async function testPerProfileConfigFallsBackToSixHourSafetySyncWithoutAdminSession() {
+async function testPerProfileConfigFallsBackToFourHourSafetySyncWithoutAdminSession() {
     const harness = createHarness({
         tabs: [{
             id: 2,
@@ -964,8 +964,53 @@ async function testPerProfileConfigFallsBackToSixHourSafetySyncWithoutAdminSessi
     assert.equal(harness.alarms.length, 1);
     assert.equal(
         new Date(harness.alarms[0].when).toISOString(),
-        '2026-01-01T06:00:00.000Z',
-        'should cap safety sync to six hours when account expiry metadata is unavailable'
+        '2026-01-01T04:00:00.000Z',
+        'should cap safety sync to four hours when account expiry metadata is unavailable'
+    );
+}
+
+async function testSafetySyncIgnoresBrowserCookieMarkedExpiry() {
+    const harness = createHarness({
+        tabs: [{
+            id: 1,
+            windowId: 1,
+            active: true,
+            status: 'complete',
+            url: FLOW2API_MANAGE_URL,
+            mockAdminToken: 'admin-token'
+        }],
+        cookies: [{
+            name: SESSION_COOKIE_NAME,
+            value: 'short-browser-cookie-session',
+            domain: 'labs.google',
+            path: '/',
+            storeId: 'default',
+            firstPartyDomain: null,
+            expirationDate: Date.UTC(2026, 0, 1, 1, 0, 0) / 1000
+        }]
+    });
+
+    const background = loadBackground(harness);
+    await harness.localStorageArea.set({
+        baseUrl: FLOW2API_ORIGIN,
+        connectionToken: 'connection-token'
+    });
+
+    const result = await background.syncCurrentSession({
+        reason: 'manual_sync',
+        allowLabsWakeup: false,
+        allowConsoleWakeup: true,
+        notifyOnError: false
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.lastSync.status, 'success');
+    assert.equal(result.lastSync.atExpires, '2026-04-30T00:00:00.000Z');
+    assert.equal(harness.alarms.length, 1);
+    assert.equal(
+        new Date(harness.alarms[0].when).toISOString(),
+        '2026-01-01T04:00:00.000Z',
+        'should ignore the browser cookie marked expiry when scheduling automatic refresh'
     );
 }
 
@@ -1011,8 +1056,8 @@ async function testKnownConnectionCanSilentlyWakeConsoleForExpiryMetadata() {
     assert.equal(harness.alarms.length, 1);
     assert.equal(
         new Date(harness.alarms[0].when).toISOString(),
-        '2026-01-01T12:00:00.000Z',
-        'should silently wake Flow2API console to recover precise expiry metadata'
+        '2026-01-01T04:00:00.000Z',
+        'should still keep the four-hour periodic refresh after silently recovering expiry metadata'
     );
     assert.equal(
         harness.createdTabs.filter((tab) => tab.url === FLOW2API_MANAGE_URL).length,
@@ -1417,7 +1462,8 @@ async function main() {
         ['prefers the current Labs session history over a stale shared store record', testSetupDataPrefersCurrentSessionHistoryOverStaleStoreRecord],
         ['detects an unsynced current Labs session instead of showing a stale account', testSetupDataDetectsUnsyncedCurrentSessionInsteadOfShowingStaleAccount],
         ['ignores legacy shared config when a fresh profile starts', testFreshProfileIgnoresLegacySharedConfig],
-        ['caps safety sync to six hours when admin expiry metadata is unavailable', testPerProfileConfigFallsBackToSixHourSafetySyncWithoutAdminSession],
+        ['caps safety sync to four hours when admin expiry metadata is unavailable', testPerProfileConfigFallsBackToFourHourSafetySyncWithoutAdminSession],
+        ['ignores browser cookie marked expiry when planning automatic refresh', testSafetySyncIgnoresBrowserCookieMarkedExpiry],
         ['silently wakes Flow2API console to recover expiry metadata for known connections', testKnownConnectionCanSilentlyWakeConsoleForExpiryMetadata],
         ['wakes the previously successful Labs cookie store before falling back to other stores', testPreferredSessionContextCanWakeSpecificStore],
         ['ignores stale Labs cookies and wakes a fresh session before syncing', testInvalidStaleCookieTriggersWakeupAndFallbackToFreshSession],

@@ -115,13 +115,13 @@ function renderSummary() {
         : (state.suggestedBaseUrl || '未设置');
 
     document.getElementById('summaryEmail').textContent = lastSync?.email || '等待识别';
-    document.getElementById('summaryExpires').textContent = formatDateTime(
-        lastSync?.atExpires || lastSync?.sessionExpiresAt
-    );
+    document.getElementById('summaryExpires').textContent = lastSync?.atExpires
+        ? formatDateTime(lastSync.atExpires)
+        : (hasConnection ? '后台最多 4 小时重刷' : '等待同步后获取');
     document.getElementById('summaryLastSync').textContent = formatDateTime(lastSync?.syncedAt);
     document.getElementById('summaryMessage').textContent = lastSync?.message
         || (hasConnection
-            ? 'Flow2API 已接入。这个 Profile 的 Google Labs 登录态有变化时，扩展会自动同步。'
+            ? 'Flow2API 已接入。这个 Profile 的 Google Labs 登录态有变化时，扩展会自动同步；就算没检测到变化，后台也会最多每 4 小时重刷一次。'
             : '第一次只要确认一次 Flow2API 地址，后续同步会自动完成。');
 
 }
@@ -163,7 +163,7 @@ function getUiModel() {
     if (lastSync?.status === 'success') {
         return {
             title: '这个 Profile 已经就绪',
-            text: 'Google Labs 登录态有变化时，扩展会自动同步到 Flow2API。你通常不需要手动操作。',
+            text: 'Google Labs 登录态有变化时，扩展会自动同步到 Flow2API；没有明显变化时，后台也会最多每 4 小时保底重刷一次。',
             actionLabel: '立即重新同步',
             actionNote: '只有在你刚切换 Labs 账号，或者想立刻刷新时，才需要点这一下。'
         };

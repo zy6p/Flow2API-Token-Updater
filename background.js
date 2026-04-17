@@ -23,9 +23,8 @@ const SESSION_CONTEXT_BY_STORE_KEY = 'sessionContextByStore';
 const CONSOLE_CONTEXT_BY_STORE_KEY = 'consoleContextByStore';
 const UNSET_VALUE = Symbol('unsetValue');
 const SYNC_ALARM_NAME = 'flow2apiSafetySync';
-const DEFAULT_SAFETY_SYNC_MINUTES = 360;
+const DEFAULT_PERIODIC_SYNC_MINUTES = 240;
 const WAITING_RETRY_MINUTES = 5;
-const EARLY_REFRESH_MS = 30 * 60 * 1000;
 const ACCESS_TOKEN_EARLY_REFRESH_MS = 10 * 60 * 1000;
 const ACCESS_TOKEN_MINIMUM_REFRESH_MS = 60 * 1000;
 const HEURISTIC_FAST_PROBE_MS = 5 * 60 * 1000;
@@ -1109,7 +1108,7 @@ async function refreshSafetyAlarm({
     }
 
     const now = Date.now();
-    const fallbackAt = now + DEFAULT_SAFETY_SYNC_MINUTES * 60 * 1000;
+    const periodicAt = now + DEFAULT_PERIODIC_SYNC_MINUTES * 60 * 1000;
     const scheduleCandidates = [];
     const scopeDiagnostics = [];
 
@@ -1124,14 +1123,9 @@ async function refreshSafetyAlarm({
             ? cookie
             : await findSessionCookie({ preferredContext, logIfMissing: false });
 
-        let cookieRefreshAt = null;
-        let cookieExpiryMs = null;
-        if (currentCookie?.expirationDate) {
-            cookieExpiryMs = currentCookie.expirationDate * 1000;
-            const desired = cookieExpiryMs - EARLY_REFRESH_MS;
-            const minimum = now + HEURISTIC_MEDIUM_PROBE_MS;
-            cookieRefreshAt = Math.max(minimum, desired);
-        }
+        const browserCookieExpiryMs = currentCookie?.expirationDate
+            ? currentCookie.expirationDate * 1000
+            : null;
 
         let accountRefreshAt = null;
         const effectiveAtExpires = normalizeCookieStoreId(currentCookieStoreId) === requestedCookieStoreId
@@ -1146,20 +1140,13 @@ async function refreshSafetyAlarm({
 
         const heuristicProbeAt = calculateHeuristicProbeAt({
             now,
-            accountExpiryMs,
-            cookieExpiryMs
+            accountExpiryMs
         });
+
+        scheduleCandidates.push(periodicAt);
 
         if (accountRefreshAt) {
             scheduleCandidates.push(accountRefreshAt);
-        }
-
-        if (cookieRefreshAt) {
-            scheduleCandidates.push(cookieRefreshAt);
-
-            if (!accountRefreshAt) {
-                scheduleCandidates.push(fallbackAt);
-            }
         }
 
         if (heuristicProbeAt) {
@@ -1173,8 +1160,9 @@ async function refreshSafetyAlarm({
         scopeDiagnostics.push({
             cookieStoreId: normalizeCookieStoreId(currentCookieStoreId) || null,
             accountExpiryAt: accountExpiryMs ? new Date(accountExpiryMs).toISOString() : null,
-            cookieExpiryAt: cookieExpiryMs ? new Date(cookieExpiryMs).toISOString() : null,
-            heuristicProbeAt: heuristicProbeAt ? new Date(heuristicProbeAt).toISOString() : null
+            browserCookieExpiryAt: browserCookieExpiryMs ? new Date(browserCookieExpiryMs).toISOString() : null,
+            heuristicProbeAt: heuristicProbeAt ? new Date(heuristicProbeAt).toISOString() : null,
+            periodicSyncAt: new Date(periodicAt).toISOString()
         });
     }
 
@@ -1496,10 +1484,6 @@ function scoreSessionCookie(cookie) {
 
     if (cookie.path === '/') {
         score += 4;
-    }
-
-    if (typeof cookie.expirationDate === 'number') {
-        score += Math.floor(cookie.expirationDate / 1000);
     }
 
     return score;
@@ -2563,19 +2547,14 @@ function buildStoreSessionPreference(cookieStoreId) {
 
 function calculateHeuristicProbeAt({
     now,
-    accountExpiryMs,
-    cookieExpiryMs
+    accountExpiryMs
 }) {
-    const upcoming = [accountExpiryMs, cookieExpiryMs]
-        .filter((value) => Number.isFinite(value) && value > now)
-        .sort((left, right) => left - right);
-
-    if (upcoming.length === 0) {
+    if (!Number.isFinite(accountExpiryMs) || accountExpiryMs <= now) {
         return null;
     }
 
-    const remainingMs = upcoming[0] - now;
-    let divisor = accountExpiryMs ? 3 : 4;
+    const remainingMs = accountExpiryMs - now;
+    let divisor = 3;
     let minimumInterval = HEURISTIC_MEDIUM_PROBE_MS;
     let maximumInterval = HEURISTIC_MAX_PROBE_MS;
 
@@ -2596,7 +2575,7 @@ function calculateHeuristicProbeAt({
         minimumInterval = 30 * 60 * 1000;
         maximumInterval = 6 * 60 * 60 * 1000;
     } else {
-        divisor = accountExpiryMs ? 3 : 4;
+        divisor = 3;
         minimumInterval = HEURISTIC_SLOW_PROBE_MS;
         maximumInterval = HEURISTIC_MAX_PROBE_MS;
     }
