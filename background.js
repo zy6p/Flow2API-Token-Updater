@@ -16,6 +16,7 @@ const LEGACY_SYNC_CONFIG_KEYS = [
     'connectionToken'
 ];
 const DEFAULT_STORE_KEY = '__default__';
+const CONFIG_BY_STORE_KEY = 'configByStore';
 const LAST_SYNC_BY_STORE_KEY = 'lastSyncByStore';
 const SESSION_CONTEXT_BY_STORE_KEY = 'sessionContextByStore';
 const CONSOLE_CONTEXT_BY_STORE_KEY = 'consoleContextByStore';
@@ -92,8 +93,8 @@ if (extensionApi.runtime.onStartup) {
         await clearLegacySharedConfig();
         await refreshSafetyAlarm();
 
-        const settings = await loadSettings();
-        if (settings.baseUrl) {
+        const configuredStoreIds = await collectConfiguredCookieStoreIds();
+        if (configuredStoreIds.length > 0) {
             await syncConfiguredSessions({
                 reason: 'startup',
                 allowLabsWakeup: true,
@@ -187,7 +188,8 @@ async function getSetupData(cookieStoreId = null) {
         await hydrateConnectionFromConsole(settings.baseUrl, {
             openIfMissing: true,
             activateOnNeedsLogin: false,
-            preferredCookieStoreId
+            preferredCookieStoreId,
+            configCookieStoreId: cookieStoreId
         });
     }
 
@@ -206,7 +208,7 @@ async function connectBaseUrl(rawBaseUrl, cookieStoreId = null) {
     const normalized = normalizeBaseUrl(rawBaseUrl);
     const preferredCookieStoreId = normalizeCookieStoreId(cookieStoreId);
 
-    await extensionApi.storage.local.set({
+    await saveScopedConfig(preferredCookieStoreId, {
         baseUrl: normalized.origin
     });
 
@@ -218,7 +220,8 @@ async function connectBaseUrl(rawBaseUrl, cookieStoreId = null) {
     const connection = await hydrateConnectionFromConsole(normalized.origin, {
         openIfMissing: true,
         activateOnNeedsLogin: true,
-        preferredCookieStoreId
+        preferredCookieStoreId,
+        configCookieStoreId: cookieStoreId
     });
 
     if (!connection.success) {
@@ -268,7 +271,16 @@ async function openConsole(rawBaseUrl, cookieStoreId = null) {
 }
 
 async function syncConfiguredSessions(options) {
+    await migrateLegacyConfig();
+
     const cookieStoreIds = await collectConfiguredCookieStoreIds();
+    if (cookieStoreIds.length === 0) {
+        return {
+            success: false,
+            error: '请先填写 Flow2API 地址'
+        };
+    }
+
     let lastResult = {
         success: false,
         error: '请先填写 Flow2API 地址'
@@ -293,6 +305,8 @@ async function syncCurrentSession({
     baseUrl = null,
     cookieStoreId = null
 }) {
+    await migrateLegacyConfig();
+
     const resolvedCookieStoreId = await resolveConfiguredCookieStoreId(cookieStoreId);
     const syncKey = storeKeyFromCookieStoreId(resolvedCookieStoreId);
 
@@ -357,7 +371,8 @@ async function performSync({
         const hydrated = await hydrateConnectionFromConsole(effectiveBaseUrl, {
             openIfMissing: allowConsoleWakeup,
             activateOnNeedsLogin: reason === 'manual_connect',
-            preferredCookieStoreId: preferredConsoleCookieStoreId
+            preferredCookieStoreId: preferredConsoleCookieStoreId,
+            configCookieStoreId: cookieStoreId
         });
 
         if (!hydrated.success) {
@@ -537,7 +552,8 @@ async function performSync({
 async function hydrateConnectionFromConsole(baseUrl, {
     openIfMissing,
     activateOnNeedsLogin,
-    preferredCookieStoreId = null
+    preferredCookieStoreId = null,
+    configCookieStoreId = null
 }) {
     const normalized = normalizeBaseUrl(baseUrl);
     const permissionGranted = await hasOriginPermission(normalized.origin);
@@ -566,7 +582,8 @@ async function hydrateConnectionFromConsole(baseUrl, {
         throw new Error('无法从 Flow2API 控制台读取连接 Token');
     }
 
-    await extensionApi.storage.local.set({
+    const targetCookieStoreId = normalizeCookieStoreId(configCookieStoreId || preferredCookieStoreId);
+    await saveScopedConfig(targetCookieStoreId, {
         baseUrl: normalized.origin,
         connectionToken
     });
@@ -1056,12 +1073,11 @@ async function refreshSafetyAlarm({
 } = {}) {
     await extensionApi.alarms.clear(SYNC_ALARM_NAME);
 
-    const settings = await loadSettings();
-    if (!settings.baseUrl || !settings.connectionToken) {
+    const configuredStoreIds = await collectConfiguredCookieStoreIds();
+    if (configuredStoreIds.length === 0) {
         return;
     }
 
-    const configuredStoreIds = await collectConfiguredCookieStoreIds();
     const requestedCookieStoreId = normalizeCookieStoreId(cookieStoreId);
     const seenStoreKeys = new Set();
     const targetStoreIds = [];
@@ -1083,6 +1099,10 @@ async function refreshSafetyAlarm({
 
     for (const currentCookieStoreId of targetStoreIds) {
         const scopedSettings = await loadSettings({ cookieStoreId: currentCookieStoreId });
+        if (!scopedSettings.baseUrl) {
+            continue;
+        }
+
         const preferredContext = scopedSettings.sessionContext || buildStoreSessionPreference(currentCookieStoreId);
         const currentCookie = cookie && normalizeCookieStoreId(cookie.storeId) === normalizeCookieStoreId(currentCookieStoreId)
             ? cookie
@@ -1155,6 +1175,8 @@ async function refreshSafetyAlarm({
 }
 
 async function handleLabsSessionRemoved(changeInfo, cookieStoreId = null) {
+    await migrateLegacyConfig();
+
     await Logger.info('Google Labs session cookie removed', {
         cause: changeInfo.cause,
         cookieStoreId: normalizeCookieStoreId(cookieStoreId) || null
@@ -1764,30 +1786,23 @@ async function hasOriginPermission(origin) {
 }
 
 async function loadSettings({ cookieStoreId = null } = {}) {
-    const stored = await extensionApi.storage.local.get([
-        'baseUrl',
-        'connectionToken'
-    ]);
     const scopedState = await loadStoreScopedState();
     const storeKey = storeKeyFromCookieStoreId(cookieStoreId);
-
-    const localBaseUrl = typeof stored.baseUrl === 'string' ? stored.baseUrl.trim() : '';
-    const localConnectionToken = typeof stored.connectionToken === 'string'
-        ? stored.connectionToken.trim()
-        : '';
+    const scopedConfig = scopedState.configByStore[storeKey] || null;
 
     return {
-        baseUrl: localBaseUrl,
-        connectionToken: localConnectionToken,
+        baseUrl: scopedConfig?.baseUrl || '',
+        connectionToken: scopedConfig?.connectionToken || '',
         lastSync: scopedState.lastSyncByStore[storeKey] || null,
         sessionContext: scopedState.sessionContextByStore[storeKey] || null,
         consoleContext: scopedState.consoleContextByStore[storeKey] || null,
-        configSource: localBaseUrl || localConnectionToken ? 'local' : 'none'
+        configSource: scopedConfig ? 'local' : 'none'
     };
 }
 
 async function loadStoreScopedState() {
     const stored = await extensionApi.storage.local.get([
+        CONFIG_BY_STORE_KEY,
         'lastSync',
         'sessionContext',
         'consoleContext',
@@ -1796,6 +1811,7 @@ async function loadStoreScopedState() {
         CONSOLE_CONTEXT_BY_STORE_KEY
     ]);
 
+    const configByStore = normalizeStoreScopedMap(stored[CONFIG_BY_STORE_KEY], normalizeScopedConfig);
     const lastSyncByStore = normalizeStoreScopedMap(stored[LAST_SYNC_BY_STORE_KEY], normalizeLastSyncValue);
     const sessionContextByStore = normalizeStoreScopedMap(stored[SESSION_CONTEXT_BY_STORE_KEY], normalizeSessionContext);
     const consoleContextByStore = normalizeStoreScopedMap(stored[CONSOLE_CONTEXT_BY_STORE_KEY], normalizeConsoleContext);
@@ -1818,6 +1834,7 @@ async function loadStoreScopedState() {
     }
 
     return {
+        configByStore,
         lastSyncByStore,
         sessionContextByStore,
         consoleContextByStore
@@ -1838,6 +1855,74 @@ function normalizeStoreScopedMap(value, normalizer) {
 
 function normalizeLastSyncValue(value) {
     return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+}
+
+function normalizeScopedConfig(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return null;
+    }
+
+    let baseUrl = '';
+    if (typeof value.baseUrl === 'string' && value.baseUrl.trim()) {
+        try {
+            baseUrl = normalizeBaseUrl(value.baseUrl).origin;
+        } catch (error) {
+            baseUrl = '';
+        }
+    }
+
+    const connectionToken = typeof value.connectionToken === 'string'
+        ? value.connectionToken.trim()
+        : '';
+
+    if (!baseUrl && !connectionToken) {
+        return null;
+    }
+
+    return {
+        baseUrl,
+        connectionToken
+    };
+}
+
+async function saveScopedConfig(cookieStoreId, {
+    baseUrl = UNSET_VALUE,
+    connectionToken = UNSET_VALUE
+} = {}) {
+    const scopedState = await loadStoreScopedState();
+    const storeKey = storeKeyFromCookieStoreId(cookieStoreId);
+    const existingConfig = scopedState.configByStore[storeKey] || {
+        baseUrl: '',
+        connectionToken: ''
+    };
+    const nextConfig = {
+        ...existingConfig
+    };
+
+    if (baseUrl !== UNSET_VALUE) {
+        if (typeof baseUrl === 'string' && baseUrl.trim()) {
+            nextConfig.baseUrl = normalizeBaseUrl(baseUrl).origin;
+        } else {
+            nextConfig.baseUrl = '';
+        }
+    }
+
+    if (connectionToken !== UNSET_VALUE) {
+        nextConfig.connectionToken = typeof connectionToken === 'string'
+            ? connectionToken.trim()
+            : '';
+    }
+
+    const normalizedConfig = normalizeScopedConfig(nextConfig);
+    if (normalizedConfig) {
+        scopedState.configByStore[storeKey] = normalizedConfig;
+    } else {
+        delete scopedState.configByStore[storeKey];
+    }
+
+    await extensionApi.storage.local.set({
+        [CONFIG_BY_STORE_KEY]: scopedState.configByStore
+    });
 }
 
 async function saveScopedSettings(cookieStoreId, {
@@ -1892,31 +1977,27 @@ async function saveScopedSettings(cookieStoreId, {
 
 async function collectConfiguredCookieStoreIds() {
     const scopedState = await loadStoreScopedState();
-    const storeKeys = new Set([
-        ...Object.keys(scopedState.lastSyncByStore),
-        ...Object.keys(scopedState.sessionContextByStore),
-        ...Object.keys(scopedState.consoleContextByStore)
-    ]);
-
-    if (storeKeys.size === 0) {
-        return [null];
-    }
+    const storeKeys = new Set(
+        Object.entries(scopedState.configByStore)
+            .filter(([, config]) => Boolean(config?.baseUrl))
+            .map(([storeKey]) => storeKey)
+    );
 
     return [...storeKeys].map(cookieStoreIdFromStoreKey);
 }
 
 async function migrateLegacyConfig() {
     const localStored = await extensionApi.storage.local.get([
+        CONFIG_BY_STORE_KEY,
         'baseUrl',
         'connectionToken',
         'apiUrl',
         ACCOUNT_SECRETS_KEY
     ]);
+    const scopedState = await loadStoreScopedState();
+    const hasScopedConfig = Object.keys(scopedState.configByStore).length > 0;
 
-    if (localStored.baseUrl && localStored.connectionToken) {
-        return false;
-    }
-
+    let legacyBaseUrl = typeof localStored.baseUrl === 'string' ? localStored.baseUrl.trim() : '';
     let legacyApiUrl = typeof localStored.apiUrl === 'string' ? localStored.apiUrl.trim() : '';
     let legacyConnectionToken = typeof localStored.connectionToken === 'string'
         ? localStored.connectionToken.trim()
@@ -1928,7 +2009,7 @@ async function migrateLegacyConfig() {
         ? await safeGetSyncStorage(['accounts', 'apiUrl', 'connectionToken'])
         : {};
 
-    if (!legacyApiUrl || !legacyConnectionToken) {
+    if ((!legacyBaseUrl && !legacyApiUrl) || !legacyConnectionToken) {
         const account = pickPrimaryAccount(
             Array.isArray(syncStored.accounts)
                 ? syncStored.accounts.map((item) => normalizeLegacyAccount({
@@ -1944,27 +2025,89 @@ async function migrateLegacyConfig() {
         }
     }
 
-    if ((!legacyApiUrl || !legacyConnectionToken) && syncStored.apiUrl && syncStored.connectionToken) {
-        legacyApiUrl = syncStored.apiUrl.trim();
-        legacyConnectionToken = syncStored.connectionToken.trim();
+    if (((!legacyBaseUrl && !legacyApiUrl) || !legacyConnectionToken) && syncStored.apiUrl && syncStored.connectionToken) {
+        if (!legacyBaseUrl && !legacyApiUrl) {
+            legacyApiUrl = syncStored.apiUrl.trim();
+        }
+
+        if (!legacyConnectionToken) {
+            legacyConnectionToken = syncStored.connectionToken.trim();
+        }
     }
 
-    if (!legacyApiUrl || !legacyConnectionToken) {
+    if (legacyBaseUrl) {
+        legacyBaseUrl = normalizeBaseUrl(legacyBaseUrl).origin;
+    }
+
+    if (!legacyBaseUrl && legacyApiUrl) {
+        legacyBaseUrl = normalizeBaseUrl(legacyApiUrl).origin;
+    }
+
+    const hasLegacyConfig = Boolean(legacyBaseUrl || legacyConnectionToken);
+    const hasLegacyLocalKeys = [
+        localStored.baseUrl,
+        localStored.connectionToken,
+        localStored.apiUrl
+    ].some((value) => value !== undefined);
+
+    if (!hasLegacyConfig) {
+        if (hasLegacyLocalKeys) {
+            await extensionApi.storage.local.remove(['baseUrl', 'connectionToken', 'apiUrl']);
+        }
         return false;
     }
 
-    const baseUrl = normalizeBaseUrl(legacyApiUrl).origin;
+    if (hasScopedConfig) {
+        if (hasLegacyLocalKeys) {
+            await extensionApi.storage.local.remove(['baseUrl', 'connectionToken', 'apiUrl']);
+        }
+        return false;
+    }
+
+    const targetStoreIds = await collectLegacyConfigTargetStoreIds(scopedState);
+    const configByStore = { ...scopedState.configByStore };
+
+    for (const targetCookieStoreId of targetStoreIds) {
+        configByStore[storeKeyFromCookieStoreId(targetCookieStoreId)] = {
+            baseUrl: legacyBaseUrl,
+            connectionToken: legacyConnectionToken
+        };
+    }
 
     await extensionApi.storage.local.set({
-        baseUrl,
-        connectionToken: legacyConnectionToken
+        [CONFIG_BY_STORE_KEY]: configByStore
     });
+    await extensionApi.storage.local.remove(['baseUrl', 'connectionToken', 'apiUrl']);
 
-    await Logger.info('Legacy config migrated to per-profile baseUrl model', {
-        baseUrl
+    await Logger.info('Legacy config migrated to per-store Flow2API config model', {
+        baseUrl: legacyBaseUrl,
+        stores: targetStoreIds.map((cookieStoreId) => normalizeCookieStoreId(cookieStoreId) || null)
     });
 
     return true;
+}
+
+async function collectLegacyConfigTargetStoreIds(scopedState = null) {
+    const effectiveScopedState = scopedState || await loadStoreScopedState();
+    const storeKeys = new Set([
+        ...Object.keys(effectiveScopedState.lastSyncByStore),
+        ...Object.keys(effectiveScopedState.sessionContextByStore),
+        ...Object.keys(effectiveScopedState.consoleContextByStore)
+    ]);
+
+    for (const cookieStoreId of await collectCandidateCookieStoreIds()) {
+        if (!cookieStoreId && storeKeys.size > 0) {
+            continue;
+        }
+
+        storeKeys.add(storeKeyFromCookieStoreId(cookieStoreId));
+    }
+
+    if (storeKeys.size === 0) {
+        storeKeys.add(DEFAULT_STORE_KEY);
+    }
+
+    return [...storeKeys].map(cookieStoreIdFromStoreKey);
 }
 
 async function safeGetSyncStorage(keys) {
@@ -2034,7 +2177,8 @@ async function pushSessionTokenWithRecovery({
         const recovered = await hydrateConnectionFromConsole(baseUrl, {
             openIfMissing: true,
             activateOnNeedsLogin: false,
-            preferredCookieStoreId
+            preferredCookieStoreId,
+            configCookieStoreId: preferredCookieStoreId
         });
 
         if (!recovered.success || !recovered.connectionToken) {

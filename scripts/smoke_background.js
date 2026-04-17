@@ -412,8 +412,8 @@ async function testConnectionSucceedsWithoutLabsSession() {
     assert.equal(result.lastSync.status, 'waiting_session');
 
     const stored = harness.localStorageArea.dump();
-    assert.equal(stored.baseUrl, FLOW2API_ORIGIN);
-    assert.equal(stored.connectionToken, 'connection-token');
+    assert.equal(stored.configByStore.__default__.baseUrl, FLOW2API_ORIGIN);
+    assert.equal(stored.configByStore.__default__.connectionToken, 'connection-token');
     assert.equal(stored.lastSync.status, 'waiting_session');
     assert.deepEqual(harness.syncStorageArea.dump(), {});
     const updateCalls = harness.apiCalls.filter((call) => call.url.endsWith('/api/plugin/update-token'));
@@ -557,6 +557,134 @@ async function testStoreScopedSetupDataStaysSeparated() {
     const stored = harness.localStorageArea.dump();
     assert.equal(stored.lastSyncByStore['firefox-container-1'].email, 'store-1-session@example.com');
     assert.equal(stored.lastSyncByStore['firefox-container-3'].email, 'store-3-session@example.com');
+}
+
+async function testStoreScopedConnectionConfigStaysSeparated() {
+    const harness = createHarness({
+        tabs: [
+            {
+                id: 1,
+                windowId: 1,
+                active: true,
+                status: 'complete',
+                url: FLOW2API_MANAGE_URL,
+                cookieStoreId: 'firefox-container-1',
+                mockAdminToken: 'admin-store-1'
+            },
+            {
+                id: 2,
+                windowId: 1,
+                active: false,
+                status: 'complete',
+                url: FLOW2API_MANAGE_URL,
+                cookieStoreId: 'firefox-container-3',
+                mockAdminToken: 'admin-store-3'
+            }
+        ],
+        cookies: [
+            {
+                name: SESSION_COOKIE_NAME,
+                value: 'store-1-session',
+                domain: 'labs.google',
+                path: '/',
+                storeId: 'firefox-container-1',
+                firstPartyDomain: null,
+                expirationDate: 1796054400
+            },
+            {
+                name: SESSION_COOKIE_NAME,
+                value: 'store-3-session',
+                domain: 'labs.google',
+                path: '/',
+                storeId: 'firefox-container-3',
+                firstPartyDomain: null,
+                expirationDate: 1796054400
+            }
+        ],
+        fetchHandler({ requestUrl, method, authHeader, body, createMockResponse }) {
+            if (requestUrl.pathname === '/api/plugin/config' && method === 'GET') {
+                if (authHeader === 'Bearer admin-store-1') {
+                    return createMockResponse(200, {
+                        config: {
+                            connection_token: 'connection-token-store-1'
+                        }
+                    });
+                }
+
+                if (authHeader === 'Bearer admin-store-3') {
+                    return createMockResponse(200, {
+                        config: {
+                            connection_token: 'connection-token-store-3'
+                        }
+                    });
+                }
+            }
+
+            if (requestUrl.pathname === '/api/tokens/st2at' && method === 'POST') {
+                if (authHeader === 'Bearer admin-store-1' || authHeader === 'Bearer admin-store-3') {
+                    return createMockResponse(200, {
+                        success: true,
+                        email: `${body.st}@example.com`,
+                        expires: '2026-04-30T00:00:00.000Z'
+                    });
+                }
+            }
+
+            if (requestUrl.pathname === '/api/plugin/update-token' && method === 'POST') {
+                if (authHeader === 'Bearer connection-token-store-1' || authHeader === 'Bearer connection-token-store-3') {
+                    return createMockResponse(200, {
+                        success: true,
+                        action: 'updated',
+                        message: `Token updated for ${body.session_token}`
+                    });
+                }
+            }
+
+            return null;
+        }
+    });
+
+    const background = loadBackground(harness);
+
+    const store1Result = await background.handleMessage({
+        action: 'connectBaseUrl',
+        baseUrl: FLOW2API_ORIGIN,
+        cookieStoreId: 'firefox-container-1'
+    });
+    const store3Result = await background.handleMessage({
+        action: 'connectBaseUrl',
+        baseUrl: FLOW2API_ORIGIN,
+        cookieStoreId: 'firefox-container-3'
+    });
+
+    assert.equal(store1Result.success, true);
+    assert.equal(store3Result.success, true);
+
+    const store1Setup = await background.handleMessage({
+        action: 'getSetupData',
+        cookieStoreId: 'firefox-container-1'
+    });
+    const store3Setup = await background.handleMessage({
+        action: 'getSetupData',
+        cookieStoreId: 'firefox-container-3'
+    });
+
+    assert.equal(store1Setup.settings.connectionToken, 'connection-token-store-1');
+    assert.equal(store3Setup.settings.connectionToken, 'connection-token-store-3');
+
+    const stored = harness.localStorageArea.dump();
+    assert.equal(stored.configByStore['firefox-container-1'].connectionToken, 'connection-token-store-1');
+    assert.equal(stored.configByStore['firefox-container-3'].connectionToken, 'connection-token-store-3');
+
+    const updateCalls = harness.apiCalls.filter((call) => call.url.endsWith('/api/plugin/update-token'));
+    assert.equal(updateCalls.length, 2);
+    assert.deepEqual(
+        updateCalls.map((call) => [call.body.session_token, call.authorization]),
+        [
+            ['store-1-session', 'Bearer connection-token-store-1'],
+            ['store-3-session', 'Bearer connection-token-store-3']
+        ]
+    );
 }
 
 async function testFreshProfileIgnoresLegacySharedConfig() {
@@ -900,7 +1028,7 @@ async function testStaleConnectionTokenCanRecoverFromConsole() {
 
     assert.equal(result.success, true);
     const stored = harness.localStorageArea.dump();
-    assert.equal(stored.connectionToken, 'connection-token');
+    assert.equal(stored.configByStore.default.connectionToken, 'connection-token');
 
     const updateCalls = harness.apiCalls.filter((call) => call.url.endsWith('/api/plugin/update-token'));
     assert.equal(updateCalls.length, 2, 'stale connection tokens should be retried once after console hydration');
@@ -986,7 +1114,7 @@ async function testStartupCanSilentlyHydrateAndSync() {
     await harness.browser.runtime.onStartup.emit();
 
     const stored = harness.localStorageArea.dump();
-    assert.equal(stored.connectionToken, 'connection-token');
+    assert.equal(stored.configByStore.__default__.connectionToken, 'connection-token');
     assert.equal(stored.lastSync.status, 'success');
     assert.equal(stored.lastSync.reason, 'startup');
 
@@ -1074,6 +1202,7 @@ async function main() {
         ['connects Flow2API even when Labs session is missing', testConnectionSucceedsWithoutLabsSession],
         ['syncs using a Labs cookie found in a non-default Firefox store', testSyncFindsCookieOutsideDefaultStore],
         ['keeps setup data isolated per Firefox cookie store', testStoreScopedSetupDataStaysSeparated],
+        ['keeps Flow2API connection config isolated per Firefox cookie store', testStoreScopedConnectionConfigStaysSeparated],
         ['ignores legacy shared config when a fresh profile starts', testFreshProfileIgnoresLegacySharedConfig],
         ['caps safety sync to six hours when admin expiry metadata is unavailable', testPerProfileConfigFallsBackToSixHourSafetySyncWithoutAdminSession],
         ['silently wakes Flow2API console to recover expiry metadata for known connections', testKnownConnectionCanSilentlyWakeConsoleForExpiryMetadata],

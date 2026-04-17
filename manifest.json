@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Flow2API Token Updater",
-  "version": "1.3.11",
+  "version": "1.3.12",
   "description": "自动提取 Google Labs cookie 并更新到 Flow2API，支持 Chrome/Edge/Firefox/Zen",
   "permissions": [
     "cookies",
