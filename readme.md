@@ -4,6 +4,7 @@
 
 - Chromium 系列：Chrome、Edge
 - Firefox 系列：Firefox、Zen Browser
+- 当前测试阶段默认只发布自签名 XPI 和 banana 下载页；官方 AMO listed 渠道默认停发，避免误上架测试版本
 - 当前版本以浏览器 profile 为运行边界；扩展不会跨真实 profile 读取 Cookie 或共用运行状态
 - 在 Firefox / Zen 里，同一 profile 下不同 cookie store / container 会分别维护自己的 Flow2API 配置、Labs 会话上下文和最近同步结果
 - 如果当前浏览器已经登录同域名的 Flow2API 控制台，扩展会自动读取插件连接 Token
@@ -118,3 +119,4 @@
 - 如果要发布到扩展市场，建议准备一个可公开访问的 HTTPS 隐私政策页面
 - Chrome Web Store 会重点检查敏感权限、数据用途与隐私披露
 - Firefox / Zen 生态通常需要签名后的 XPI 包；长期使用建议走自分发签名包 + `updates.json` 自动更新链
+- 默认的一键发布命令 `./scripts/release_all.sh` 只会发布自签名 XPI、GitHub Release 和 banana 下载页；如果未来需要恢复官方 AMO listed，请显式使用 `RELEASE_WITH_AMO_LISTED=1 ./scripts/release_all.sh`

@@ -32,6 +32,7 @@ UPSTREAM_REMOTE="${RELEASE_UPSTREAM_REMOTE:-upstream}"
 ORIGIN_REPO="${RELEASE_GH_REPO:-$(remote_repo_slug "${ORIGIN_REMOTE}")}"
 UPSTREAM_REPO="${RELEASE_UPSTREAM_REPO:-$(remote_repo_slug "${UPSTREAM_REMOTE}" 2>/dev/null || true)}"
 PAGES_PROJECT="${CF_PAGES_PROJECT:-banana-rematrixed-com}"
+RELEASE_WITH_AMO_LISTED="${RELEASE_WITH_AMO_LISTED:-0}"
 HEAD_SHA=""
 
 if [[ -z "${ORIGIN_REPO}" ]]; then
@@ -55,7 +56,11 @@ fi
 node scripts/smoke_background.js
 
 ./scripts/sign_amo_unlisted.sh
-./scripts/sign_amo_listed.sh
+if [[ "${RELEASE_WITH_AMO_LISTED}" == "1" ]]; then
+  AMO_LISTED_ENABLED=1 ./scripts/sign_amo_listed.sh
+else
+  echo "Skipping AMO listed release; set RELEASE_WITH_AMO_LISTED=1 to enable it"
+fi
 ./scripts/build_cloudflare_pages.sh
 
 HEAD_SHA="$(git rev-parse HEAD)"
@@ -96,12 +101,17 @@ RELEASE_ASSETS=(
   "dist/firefox/flow2api_token_updater-${VERSION}.zip"
   "dist/firefox/flow2api_token_updater-gecko-temp-${VERSION}.zip"
   "dist/firefox/flow2api_token_updater-selfhost-${VERSION}.2.xpi"
-  "web-ext-artifacts/flow2api-token-updater-amo-${VERSION}.zip"
-  "web-ext-artifacts/flow2api-token-updater-source-${VERSION}.tar.gz"
   ".cloudflare-pages/downloads/latest.json"
   ".cloudflare-pages/downloads/SHA256SUMS"
   ".cloudflare-pages/downloads/updates.json"
 )
+
+if [[ "${RELEASE_WITH_AMO_LISTED}" == "1" ]]; then
+  RELEASE_ASSETS+=(
+    "web-ext-artifacts/flow2api-token-updater-amo-${VERSION}.zip"
+    "web-ext-artifacts/flow2api-token-updater-source-${VERSION}.tar.gz"
+  )
+fi
 
 if gh release view "${TAG_NAME}" --repo "${ORIGIN_REPO}" >/dev/null 2>&1; then
   gh release upload "${TAG_NAME}" "${RELEASE_ASSETS[@]}" --repo "${ORIGIN_REPO}" --clobber

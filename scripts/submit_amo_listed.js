@@ -12,6 +12,7 @@ const { apiKey: API_KEY, apiSecret: API_SECRET } = loadAmoCredentials(ROOT_DIR);
 const UPLOAD_TIMEOUT_MS = Number(process.env.AMO_UPLOAD_TIMEOUT_MS || 120000);
 const UPLOAD_POLL_INTERVAL_MS = Number(process.env.AMO_UPLOAD_POLL_INTERVAL_MS || 2000);
 const ALLOW_THROTTLE_SKIP = `${process.env.AMO_ALLOW_THROTTLE_SKIP || '1'}` !== '0';
+const AMO_LISTED_ENABLED = `${process.env.AMO_LISTED_ENABLED || '0'}` === '1';
 
 
 const manifest = JSON.parse(
@@ -30,6 +31,11 @@ const packagePath = path.join(
 );
 
 async function main() {
+    if (!AMO_LISTED_ENABLED) {
+        console.log('AMO listed release is disabled by default during testing. Set AMO_LISTED_ENABLED=1 to publish.');
+        return;
+    }
+
     ensureFileExists(packagePath);
 
     const currentAddon = await getAddon();
