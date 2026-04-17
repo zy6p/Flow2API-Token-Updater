@@ -1,4 +1,10 @@
 const extensionApi = globalThis.browser ?? globalThis.chrome;
+const DEFAULT_STORE_KEY = '__default__';
+const state = {
+    activeCookieStoreId: null,
+    activeStoreKey: DEFAULT_STORE_KEY,
+    showAllStores: false
+};
 
 async function getCurrentCookieStoreId() {
     if (!extensionApi.tabs?.query) {
@@ -17,8 +23,31 @@ async function getCurrentCookieStoreId() {
     }
 }
 
+function storeKeyFromCookieStoreId(cookieStoreId) {
+    return cookieStoreId || DEFAULT_STORE_KEY;
+}
+
+function describeStore(cookieStoreId) {
+    return cookieStoreId || '默认 Profile / store';
+}
+
+async function ensureActiveStoreContext() {
+    if (state.activeCookieStoreId !== null || state.activeStoreKey !== DEFAULT_STORE_KEY) {
+        return;
+    }
+
+    state.activeCookieStoreId = await getCurrentCookieStoreId();
+    state.activeStoreKey = storeKeyFromCookieStoreId(state.activeCookieStoreId);
+}
+
 async function fetchLogs() {
-    const response = await extensionApi.runtime.sendMessage({ action: 'getLogs' });
+    await ensureActiveStoreContext();
+    const response = await extensionApi.runtime.sendMessage({
+        action: 'getLogs',
+        filterByStore: !state.showAllStores,
+        storeKey: state.activeStoreKey,
+        includeGlobal: true
+    });
 
     if (!response?.success) {
         throw new Error(response?.error || '加载日志失败');
@@ -28,10 +57,11 @@ async function fetchLogs() {
 }
 
 async function fetchSetupData() {
-    const cookieStoreId = await getCurrentCookieStoreId();
+    await ensureActiveStoreContext();
     const response = await extensionApi.runtime.sendMessage({
         action: 'getSetupData',
-        cookieStoreId
+        cookieStoreId: state.activeCookieStoreId,
+        previewCurrentSession: true
     });
 
     if (!response?.success) {
@@ -39,9 +69,9 @@ async function fetchSetupData() {
     }
 
     return {
-        cookieStoreId,
+        cookieStoreId: state.activeCookieStoreId,
         browserInfo: response.browserInfo || null,
-        hasConnection: Boolean(response.hasConnection || response.settings?.connectionToken),
+        hasConnection: Boolean(response.hasConnection),
         settings: response.settings || null
     };
 }
@@ -88,6 +118,17 @@ function createEmptyState(icon, text) {
     wrapper.appendChild(textEl);
 
     return wrapper;
+}
+
+function updateScopeUi() {
+    const scopeBtn = document.getElementById('scopeBtn');
+    const filterNote = document.getElementById('filterNote');
+    const currentScopeLabel = describeStore(state.activeCookieStoreId);
+
+    scopeBtn.textContent = state.showAllStores ? '只看当前' : '查看全部';
+    filterNote.textContent = state.showAllStores
+        ? `当前显示全部 Profile / store 的日志；当前页面属于 ${currentScopeLabel}`
+        : `当前只显示 ${currentScopeLabel} 的日志，并附带少量全局事件`;
 }
 
 // 渲染日志
@@ -139,6 +180,8 @@ function renderLogs(logs) {
 // 加载日志
 async function loadLogs() {
     try {
+        await ensureActiveStoreContext();
+        updateScopeUi();
         renderLogs(await fetchLogs());
     } catch (error) {
         const container = document.getElementById('logsContainer');
@@ -172,9 +215,11 @@ async function copyDiagnostics() {
         const payload = {
             exportedAt: new Date().toISOString(),
             activeCookieStoreId: setup.cookieStoreId,
+            activeStoreKey: state.activeStoreKey,
+            scope: state.showAllStores ? 'all' : 'current_store',
             browserInfo: setup.browserInfo,
             hasConnection: setup.hasConnection,
-            settings: setup.settings,
+            settings: sanitizeSetupForExport(setup.settings),
             logs
         };
 
@@ -189,6 +234,37 @@ async function copyDiagnostics() {
             copyButton.textContent = originalLabel;
         }, 1500);
     }
+}
+
+function sanitizeSetupForExport(settings) {
+    if (!settings || typeof settings !== 'object') {
+        return settings;
+    }
+
+    const sanitized = { ...settings };
+    if (Object.prototype.hasOwnProperty.call(settings, 'connectionToken')) {
+        sanitized.connectionToken = maskSecret(settings.connectionToken);
+    }
+
+    return sanitized;
+}
+
+function maskSecret(value) {
+    if (typeof value !== 'string' || !value.trim()) {
+        return value || '';
+    }
+
+    const trimmed = value.trim();
+    if (trimmed.length <= 8) {
+        return '*'.repeat(trimmed.length);
+    }
+
+    return `${trimmed.slice(0, 4)}...${trimmed.slice(-4)}`;
+}
+
+function toggleScope() {
+    state.showAllStores = !state.showAllStores;
+    loadLogs();
 }
 
 async function writeTextToClipboard(text) {
@@ -214,6 +290,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 刷新按钮
     document.getElementById('refreshBtn').addEventListener('click', loadLogs);
+
+    // 当前 store / 全部切换
+    document.getElementById('scopeBtn').addEventListener('click', toggleScope);
 
     // 清空按钮
     document.getElementById('clearBtn').addEventListener('click', clearLogs);

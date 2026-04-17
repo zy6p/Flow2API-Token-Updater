@@ -64,6 +64,14 @@
         .btn-copy:hover {
             background: #086746;
         }
+        .btn-toggle {
+            background: #eef2f6;
+            color: #344054;
+            border: 1px solid #d0d5dd;
+        }
+        .btn-toggle:hover {
+            background: #e4e7ec;
+        }
         .btn-back {
             background: #6c757d;
             color: white;
@@ -152,6 +160,11 @@
             font-size: 48px;
             margin-bottom: 12px;
         }
+        .filter-note {
+            margin-bottom: 10px;
+            color: #667085;
+            font-size: 12px;
+        }
     </style>
 </head>
 <body>
@@ -159,12 +172,14 @@
         <h1>📋 日志查看</h1>
         <div class="actions">
             <button class="btn-refresh" id="refreshBtn">🔄 刷新</button>
+            <button class="btn-toggle" id="scopeBtn">只看当前</button>
             <button class="btn-copy" id="copyBtn">复制诊断</button>
-            <button class="btn-clear" id="clearBtn">🗑️ 清空</button>
+            <button class="btn-clear" id="clearBtn">🗑️ 清空全部</button>
             <button class="btn-back" id="backBtn">← 返回</button>
         </div>
     </div>
 
+    <div class="filter-note" id="filterNote">正在识别当前 Profile...</div>
     <div class="logs-container" id="logsContainer">
         <div class="empty-state">
             <div class="empty-state-icon">📝</div>

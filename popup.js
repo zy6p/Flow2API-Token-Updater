@@ -18,6 +18,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 function bindEvents() {
     document.getElementById('connectBtn').addEventListener('click', runPrimaryAction);
+    document.getElementById('refreshStatusBtn').addEventListener('click', refreshStatus);
     document.getElementById('consoleBtn').addEventListener('click', openConsole);
     document.getElementById('logsBtn').addEventListener('click', openLogs);
 }
@@ -30,39 +31,46 @@ async function loadSetupData() {
 
         const response = await extensionApi.runtime.sendMessage({
             action: 'getSetupData',
-            cookieStoreId
+            cookieStoreId,
+            previewCurrentSession: true
         });
 
         if (!response?.success) {
             throw new Error(response?.error || '加载失败');
         }
 
-        state.baseUrl = response.settings?.baseUrl || '';
-        state.lastSync = response.settings?.lastSync || null;
-        state.browserInfo = response.browserInfo || null;
-        state.suggestedBaseUrl = response.suggestedBaseUrl || '';
-        state.hasConnection = Boolean(response.hasConnection || response.settings?.connectionToken);
-        state.configSource = response.settings?.configSource || 'none';
-
+        applySetupResponse(response);
         render(true);
-
-        if (state.lastSync?.status === 'success') {
-            showStatus('这个 Profile 已经就绪。', 'success');
-        } else if (state.lastSync?.status === 'detected_session') {
-            showStatus(state.lastSync.message || '检测到当前账号，点一下就可以同步这个账号。', 'info');
-        } else if (state.lastSync?.status === 'error') {
-            showStatus(state.lastSync.message || '这次同步没有完成。', 'error');
-        } else if (state.lastSync?.status === 'waiting_session' || state.hasConnection) {
-            showStatus(state.lastSync?.message || 'Flow2API 已接入，等你在这个 Profile 登录 Labs。', 'info');
-        } else if (state.baseUrl) {
-            showStatus('确认这个地址后，就可以把当前 Profile 接到 Flow2API。', 'info');
-        } else {
-            hideStatusSoon();
-        }
+        showStatusForCurrentState();
     } catch (error) {
         showStatus(`加载失败：${error.message}`, 'error');
     } finally {
         setBusy(false);
+    }
+}
+
+function applySetupResponse(response) {
+    state.baseUrl = response.settings?.baseUrl || '';
+    state.lastSync = response.settings?.lastSync || null;
+    state.browserInfo = response.browserInfo || null;
+    state.suggestedBaseUrl = response.suggestedBaseUrl || '';
+    state.hasConnection = Boolean(response.hasConnection);
+    state.configSource = response.settings?.configSource || 'none';
+}
+
+function showStatusForCurrentState() {
+    if (state.lastSync?.status === 'success') {
+        showStatus('这个 Profile 已经就绪。', 'success');
+    } else if (state.lastSync?.status === 'detected_session') {
+        showStatus(state.lastSync.message || '检测到当前账号，点一下就可以同步这个账号。', 'info');
+    } else if (state.lastSync?.status === 'error') {
+        showStatus(state.lastSync.message || '这次同步没有完成。', 'error');
+    } else if (state.lastSync?.status === 'waiting_session' || state.hasConnection) {
+        showStatus(state.lastSync?.message || 'Flow2API 已接入，等你在这个 Profile 登录 Labs。', 'info');
+    } else if (state.baseUrl) {
+        showStatus('确认这个地址后，就可以把当前 Profile 接到 Flow2API。', 'info');
+    } else {
+        hideStatusSoon();
     }
 }
 
@@ -333,6 +341,34 @@ async function openConsole() {
     }
 }
 
+async function refreshStatus() {
+    try {
+        setBusy(true);
+        showStatus('正在刷新当前 Profile 的状态...', 'info');
+
+        const cookieStoreId = await getCurrentCookieStoreId();
+        const response = await extensionApi.runtime.sendMessage({
+            action: 'getSetupData',
+            cookieStoreId,
+            previewCurrentSession: true,
+            refreshConnection: true,
+            allowSessionMetadataLookup: true
+        });
+
+        if (!response?.success) {
+            throw new Error(response?.error || '刷新状态失败');
+        }
+
+        applySetupResponse(response);
+        render(true);
+        showStatusForCurrentState();
+    } catch (error) {
+        showStatus(error.message || '刷新状态失败', 'error');
+    } finally {
+        setBusy(false);
+    }
+}
+
 async function openLogs() {
     const logsUrl = extensionApi.runtime?.getURL
         ? extensionApi.runtime.getURL('logs.html')
@@ -440,6 +476,7 @@ function toOriginPattern(baseUrl) {
 
 function setBusy(isBusy) {
     document.getElementById('connectBtn').disabled = isBusy;
+    document.getElementById('refreshStatusBtn').disabled = isBusy;
     document.getElementById('consoleBtn').disabled = isBusy || !hasConsoleTarget();
     document.getElementById('logsBtn').disabled = isBusy;
     document.body.classList.toggle('busy', isBusy);

@@ -669,8 +669,10 @@ async function testStoreScopedConnectionConfigStaysSeparated() {
         cookieStoreId: 'firefox-container-3'
     });
 
-    assert.equal(store1Setup.settings.connectionToken, 'connection-token-store-1');
-    assert.equal(store3Setup.settings.connectionToken, 'connection-token-store-3');
+    assert.equal(store1Setup.hasConnection, true);
+    assert.equal(store3Setup.hasConnection, true);
+    assert.equal('connectionToken' in store1Setup.settings, false);
+    assert.equal('connectionToken' in store3Setup.settings, false);
 
     const stored = harness.localStorageArea.dump();
     assert.equal(stored.configByStore['firefox-container-1'].connectionToken, 'connection-token-store-1');
@@ -729,7 +731,8 @@ async function testSharedConnectionConfigCanBeReusedAcrossStores() {
 
     assert.equal(setup.success, true);
     assert.equal(setup.settings.baseUrl, FLOW2API_ORIGIN);
-    assert.equal(setup.settings.connectionToken, 'connection-token');
+    assert.equal(setup.hasConnection, true);
+    assert.equal('connectionToken' in setup.settings, false);
     assert.equal(setup.settings.configSource, 'shared');
 
     const syncResult = await background.handleMessage({
@@ -890,7 +893,9 @@ async function testSetupDataDetectsUnsyncedCurrentSessionInsteadOfShowingStaleAc
         }
     });
 
-    const setup = await background.getSetupData('default');
+    const setup = await background.getSetupData('default', {
+        allowSessionMetadataLookup: true
+    });
     assert.equal(setup.success, true);
     assert.equal(setup.settings.lastSync.status, 'detected_session');
     assert.equal(setup.settings.lastSync.email, 'profile-b@example.com');
@@ -911,7 +916,7 @@ async function testFreshProfileIgnoresLegacySharedConfig() {
     const setup = await background.getSetupData();
 
     assert.equal(setup.settings.baseUrl, '');
-    assert.equal(setup.settings.connectionToken, '');
+    assert.equal('connectionToken' in setup.settings, false);
     assert.equal(setup.settings.configSource, 'none');
     assert.equal(setup.hasConnection, false);
 
@@ -967,6 +972,146 @@ async function testPerProfileConfigFallsBackToFourHourSafetySyncWithoutAdminSess
         '2026-01-01T04:00:00.000Z',
         'should cap safety sync to four hours when account expiry metadata is unavailable'
     );
+}
+
+async function testPassiveSetupDataDoesNotHydrateConnectionUntilExplicitRefresh() {
+    const harness = createHarness({
+        tabs: [{
+            id: 1,
+            windowId: 1,
+            active: true,
+            status: 'complete',
+            url: FLOW2API_MANAGE_URL,
+            mockAdminToken: 'admin-token'
+        }],
+        cookies: [{
+            name: SESSION_COOKIE_NAME,
+            value: 'passive-preview-session',
+            domain: 'labs.google',
+            path: '/',
+            storeId: 'default',
+            firstPartyDomain: null,
+            expirationDate: 1796054400
+        }]
+    });
+
+    const background = loadBackground(harness);
+    await harness.localStorageArea.set({
+        configByStore: {
+            default: {
+                baseUrl: FLOW2API_ORIGIN,
+                connectionToken: ''
+            }
+        }
+    });
+
+    const passiveSetup = await background.getSetupData('default');
+    assert.equal(passiveSetup.success, true);
+    assert.equal(passiveSetup.hasConnection, false);
+    assert.equal(passiveSetup.settings.lastSync.status, 'detected_session');
+    assert.equal(passiveSetup.settings.lastSync.email, null);
+    assert.equal(harness.apiCalls.length, 0, 'passive popup reads should not hydrate Flow2API or fetch metadata');
+
+    const refreshedSetup = await background.getSetupData('default', {
+        refreshConnection: true,
+        allowSessionMetadataLookup: true
+    });
+    assert.equal(refreshedSetup.success, true);
+    assert.equal(refreshedSetup.hasConnection, true);
+    assert.equal(refreshedSetup.settings.lastSync.email, 'user@example.com');
+    assert.ok(
+        harness.apiCalls.some((call) => call.url.endsWith('/api/plugin/config')),
+        'explicit refresh should be allowed to hydrate the Flow2API connection'
+    );
+}
+
+async function testScheduledAlarmOnlySyncsDueStores() {
+    const harness = createHarness({
+        cookies: [
+            {
+                name: SESSION_COOKIE_NAME,
+                value: 'waiting-store-session',
+                domain: 'labs.google',
+                path: '/',
+                storeId: 'firefox-container-1',
+                firstPartyDomain: null,
+                expirationDate: 1796054400
+            },
+            {
+                name: SESSION_COOKIE_NAME,
+                value: 'healthy-store-session',
+                domain: 'labs.google',
+                path: '/',
+                storeId: 'firefox-container-2',
+                firstPartyDomain: null,
+                expirationDate: 1796054400
+            }
+        ],
+        fetchHandler({ requestUrl, method, body, createMockResponse }) {
+            if (requestUrl.pathname === '/api/plugin/update-token' && method === 'POST') {
+                return createMockResponse(200, {
+                    success: true,
+                    action: 'updated',
+                    message: `Token updated for ${body.session_token}`
+                });
+            }
+
+            return null;
+        }
+    });
+
+    const background = loadBackground(harness);
+    await harness.localStorageArea.set({
+        configByStore: {
+            'firefox-container-1': {
+                baseUrl: FLOW2API_ORIGIN,
+                connectionToken: 'connection-token'
+            },
+            'firefox-container-2': {
+                baseUrl: FLOW2API_ORIGIN,
+                connectionToken: 'connection-token'
+            }
+        },
+        lastSyncByStore: {
+            'firefox-container-1': {
+                status: 'waiting_session',
+                reason: 'scheduled_check',
+                checkedAt: '2026-01-01T00:00:00.000Z',
+                email: null,
+                atExpires: null,
+                sessionExpiresAt: null,
+                sessionFingerprint: null,
+                action: null,
+                message: 'waiting'
+            },
+            'firefox-container-2': {
+                status: 'success',
+                reason: 'scheduled_check',
+                syncedAt: '2026-01-01T00:00:00.000Z',
+                email: 'healthy@example.com',
+                atExpires: null,
+                sessionExpiresAt: '2026-11-30T16:00:00.000Z',
+                sessionFingerprint: background.fingerprintSessionToken('healthy-store-session'),
+                action: 'updated',
+                message: '同步成功'
+            }
+        }
+    });
+
+    await background.refreshSafetyAlarm();
+    assert.equal(harness.alarms.length, 1);
+    assert.equal(
+        new Date(harness.alarms[0].when).toISOString(),
+        '2026-01-01T00:05:00.000Z',
+        'waiting stores should pull the next global alarm forward without dragging healthy stores into the same sync run'
+    );
+
+    await background.sleep(5 * 60 * 1000);
+    await harness.browser.alarms.onAlarm.emit({ name: 'flow2apiSafetySync' });
+
+    const updateCalls = harness.apiCalls.filter((call) => call.url.endsWith('/api/plugin/update-token'));
+    assert.equal(updateCalls.length, 1);
+    assert.equal(updateCalls[0].body.session_token, 'waiting-store-session');
 }
 
 async function testSafetySyncIgnoresBrowserCookieMarkedExpiry() {
@@ -1462,7 +1607,9 @@ async function main() {
         ['prefers the current Labs session history over a stale shared store record', testSetupDataPrefersCurrentSessionHistoryOverStaleStoreRecord],
         ['detects an unsynced current Labs session instead of showing a stale account', testSetupDataDetectsUnsyncedCurrentSessionInsteadOfShowingStaleAccount],
         ['ignores legacy shared config when a fresh profile starts', testFreshProfileIgnoresLegacySharedConfig],
+        ['keeps popup setup reads passive until the user explicitly refreshes state', testPassiveSetupDataDoesNotHydrateConnectionUntilExplicitRefresh],
         ['caps safety sync to four hours when admin expiry metadata is unavailable', testPerProfileConfigFallsBackToFourHourSafetySyncWithoutAdminSession],
+        ['scheduled alarms only sync stores that are actually due', testScheduledAlarmOnlySyncsDueStores],
         ['ignores browser cookie marked expiry when planning automatic refresh', testSafetySyncIgnoresBrowserCookieMarkedExpiry],
         ['silently wakes Flow2API console to recover expiry metadata for known connections', testKnownConnectionCanSilentlyWakeConsoleForExpiryMetadata],
         ['wakes the previously successful Labs cookie store before falling back to other stores', testPreferredSessionContextCanWakeSpecificStore],
