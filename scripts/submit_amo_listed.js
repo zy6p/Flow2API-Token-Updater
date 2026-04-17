@@ -11,6 +11,7 @@ const ADDON_ID = (process.env.AMO_ADDON_ID || 'flow2api-token-updater').trim();
 const { apiKey: API_KEY, apiSecret: API_SECRET } = loadAmoCredentials(ROOT_DIR);
 const UPLOAD_TIMEOUT_MS = Number(process.env.AMO_UPLOAD_TIMEOUT_MS || 120000);
 const UPLOAD_POLL_INTERVAL_MS = Number(process.env.AMO_UPLOAD_POLL_INTERVAL_MS || 2000);
+const ALLOW_THROTTLE_SKIP = `${process.env.AMO_ALLOW_THROTTLE_SKIP || '1'}` !== '0';
 
 
 const manifest = JSON.parse(
@@ -31,9 +32,6 @@ const packagePath = path.join(
 async function main() {
     ensureFileExists(packagePath);
 
-    await updateAddonListing();
-    await updateAddonEulaPolicy();
-
     const currentAddon = await getAddon();
     const currentVersion = currentAddon.current_version?.version || null;
     if (currentVersion === manifest.version) {
@@ -44,22 +42,36 @@ async function main() {
         return;
     }
 
-    const upload = await createUpload(packagePath);
-    const processedUpload = await waitForProcessedUpload(upload);
+    try {
+        await updateAddonListing();
+        await updateAddonEulaPolicy();
 
-    if (!processedUpload.valid) {
-        printValidationErrors(processedUpload.validation);
-        throw new Error('AMO upload validation failed');
+        const upload = await createUpload(packagePath);
+        const processedUpload = await waitForProcessedUpload(upload);
+
+        if (!processedUpload.valid) {
+            printValidationErrors(processedUpload.validation);
+            throw new Error('AMO upload validation failed');
+        }
+
+        const version = await createListedVersion({
+            uploadUuid: processedUpload.uuid,
+            approvalNotes: metadata.version?.approval_notes || ''
+        });
+
+        console.log(`AMO listed version created: ${version.version}`);
+        console.log(`AMO version id: ${version.id}`);
+        console.log(`AMO edit URL: ${version.edit_url}`);
+    } catch (error) {
+        if (ALLOW_THROTTLE_SKIP && isAmoThrottleError(error)) {
+            console.warn(
+                `AMO listed release throttled for ${manifest.version}; leaving listed channel at ${currentVersion || 'unknown'} and continuing other release channels`
+            );
+            return;
+        }
+
+        throw error;
     }
-
-    const version = await createListedVersion({
-        uploadUuid: processedUpload.uuid,
-        approvalNotes: metadata.version?.approval_notes || ''
-    });
-
-    console.log(`AMO listed version created: ${version.version}`);
-    console.log(`AMO version id: ${version.id}`);
-    console.log(`AMO edit URL: ${version.edit_url}`);
 }
 
 function ensureFileExists(filePath) {
