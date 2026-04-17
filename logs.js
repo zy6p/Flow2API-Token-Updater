@@ -1,5 +1,51 @@
 const extensionApi = globalThis.browser ?? globalThis.chrome;
 
+async function getCurrentCookieStoreId() {
+    if (!extensionApi.tabs?.query) {
+        return null;
+    }
+
+    try {
+        const tabs = await extensionApi.tabs.query({
+            active: true,
+            currentWindow: true
+        });
+
+        return tabs[0]?.cookieStoreId || null;
+    } catch (error) {
+        return null;
+    }
+}
+
+async function fetchLogs() {
+    const response = await extensionApi.runtime.sendMessage({ action: 'getLogs' });
+
+    if (!response?.success) {
+        throw new Error(response?.error || '加载日志失败');
+    }
+
+    return response.logs || [];
+}
+
+async function fetchSetupData() {
+    const cookieStoreId = await getCurrentCookieStoreId();
+    const response = await extensionApi.runtime.sendMessage({
+        action: 'getSetupData',
+        cookieStoreId
+    });
+
+    if (!response?.success) {
+        throw new Error(response?.error || '加载当前状态失败');
+    }
+
+    return {
+        cookieStoreId,
+        browserInfo: response.browserInfo || null,
+        hasConnection: Boolean(response.hasConnection || response.settings?.connectionToken),
+        settings: response.settings || null
+    };
+}
+
 // 格式化时间
 function formatTime(isoString) {
     const date = new Date(isoString);
@@ -92,15 +138,12 @@ function renderLogs(logs) {
 
 // 加载日志
 async function loadLogs() {
-    const response = await extensionApi.runtime.sendMessage({ action: 'getLogs' });
-
-    if (response && response.success) {
-        renderLogs(response.logs);
-        return;
+    try {
+        renderLogs(await fetchLogs());
+    } catch (error) {
+        const container = document.getElementById('logsContainer');
+        container.replaceChildren(createEmptyState('❌', error.message || '加载日志失败'));
     }
-
-    const container = document.getElementById('logsContainer');
-    container.replaceChildren(createEmptyState('❌', '加载日志失败'));
 }
 
 // 清空日志
@@ -115,6 +158,56 @@ async function clearLogs() {
     }
 }
 
+async function copyDiagnostics() {
+    const copyButton = document.getElementById('copyBtn');
+    const originalLabel = copyButton.textContent;
+    copyButton.disabled = true;
+
+    try {
+        const [setup, logs] = await Promise.all([
+            fetchSetupData(),
+            fetchLogs()
+        ]);
+
+        const payload = {
+            exportedAt: new Date().toISOString(),
+            activeCookieStoreId: setup.cookieStoreId,
+            browserInfo: setup.browserInfo,
+            hasConnection: setup.hasConnection,
+            settings: setup.settings,
+            logs
+        };
+
+        const text = JSON.stringify(payload, null, 2);
+        await writeTextToClipboard(text);
+        copyButton.textContent = '已复制';
+    } catch (error) {
+        copyButton.textContent = '复制失败';
+    } finally {
+        setTimeout(() => {
+            copyButton.disabled = false;
+            copyButton.textContent = originalLabel;
+        }, 1500);
+    }
+}
+
+async function writeTextToClipboard(text) {
+    if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', 'readonly');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+}
+
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
     loadLogs();
@@ -124,6 +217,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 清空按钮
     document.getElementById('clearBtn').addEventListener('click', clearLogs);
+
+    // 复制诊断
+    document.getElementById('copyBtn').addEventListener('click', copyDiagnostics);
 
     // 返回按钮
     document.getElementById('backBtn').addEventListener('click', () => {

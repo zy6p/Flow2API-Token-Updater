@@ -94,7 +94,25 @@
     如果您不知道 Flow2API 控制台地址，请先打开自己的 Flow2API 管理后台，然后把它的站点根地址填到扩展里即可。
     ![后台查看配置](image-3.png)
 
-## 三、Zen 多 Profile 推荐方案
+## 三、 故障排查
+
+1.  **先看扩展自己的诊断日志**
+    点扩展图标，然后点 `查看诊断日志`。
+    这里会显示最近 120 条后台日志，包括：
+    - 当前是哪个 profile / cookie store 在同步
+    - 自动刷新什么时候被安排
+    - 是 Labs 会话没找到、Cookie 已失效，还是 Flow2API 连接 Token 失效
+
+2.  **需要反馈问题时直接复制诊断**
+    在日志页点 `复制诊断`，会把当前 profile 的同步状态、浏览器信息和最近日志一起复制出来，方便直接贴出来分析。
+
+3.  **如果日志还不够，再看 Firefox / Zen 的扩展调试页**
+    打开 `about:debugging#/runtime/this-firefox`
+    找到 `Flow2API Token Updater`
+    点 `Inspect`
+    这里能看到扩展后台脚本的实时 `console` 输出和报错堆栈。
+
+## 四、Zen 多 Profile 推荐方案
 
 如果你像现在这样有 **13 个 profiles**，其中只有 **7 个 Google 账号** 分布在不同 profile 里，并且这些账号都能登录 Flow，推荐按下面的思路配置：
 
@@ -105,7 +123,7 @@
 4.  其余 profile 可以不装扩展，或者装了但不保存配置。
 5.  不要让多个 profile 长期对同一套 Flow2API 账号池反复覆盖同一个 Google 账号，否则通常是谁最后同步谁覆盖。
 
-## 四、 隐私与存储说明
+## 五、 隐私与存储说明
 
 - 扩展会读取 `labs.google` 的登录 Cookie，并提取 `__Secure-next-auth.session-token`
 - 当用户填写 `Base URL` 且同浏览器已登录 Flow2API 控制台时，扩展会临时读取控制台的本地登录状态，以自动获取插件连接 Token
@@ -115,7 +133,7 @@
 - `Base URL`、插件连接 Token、最近一次同步结果和日志都只保存在当前浏览器本地；其中 Flow2API 连接配置可以在同一浏览器实例内复用，但不会同步到别的浏览器安装
 - 更多说明见 [privacy.html](privacy.html)
 
-## 五、 上架前建议
+## 六、 上架前建议
 
 - 如果要发布到扩展市场，建议准备一个可公开访问的 HTTPS 隐私政策页面
 - Chrome Web Store 会重点检查敏感权限、数据用途与隐私披露

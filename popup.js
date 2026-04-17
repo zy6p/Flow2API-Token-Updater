@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 function bindEvents() {
     document.getElementById('connectBtn').addEventListener('click', runPrimaryAction);
     document.getElementById('consoleBtn').addEventListener('click', openConsole);
+    document.getElementById('logsBtn').addEventListener('click', openLogs);
 }
 
 async function loadSetupData() {
@@ -332,6 +333,24 @@ async function openConsole() {
     }
 }
 
+async function openLogs() {
+    const logsUrl = extensionApi.runtime?.getURL
+        ? extensionApi.runtime.getURL('logs.html')
+        : 'logs.html';
+
+    try {
+        if (extensionApi.tabs?.create) {
+            await extensionApi.tabs.create({ url: logsUrl });
+        } else {
+            window.location.href = logsUrl;
+        }
+
+        showStatus('已打开诊断日志页', 'info');
+    } catch (error) {
+        showStatus(error.message || '打开诊断日志失败', 'error');
+    }
+}
+
 async function getCurrentCookieStoreId() {
     if (!extensionApi.tabs?.query) {
         return null;
@@ -422,6 +441,7 @@ function toOriginPattern(baseUrl) {
 function setBusy(isBusy) {
     document.getElementById('connectBtn').disabled = isBusy;
     document.getElementById('consoleBtn').disabled = isBusy || !hasConsoleTarget();
+    document.getElementById('logsBtn').disabled = isBusy;
     document.body.classList.toggle('busy', isBusy);
 }
 
