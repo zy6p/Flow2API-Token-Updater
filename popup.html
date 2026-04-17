@@ -140,11 +140,36 @@
             transform: translateY(-1px);
         }
 
+        select {
+            width: 100%;
+            border: 1px solid rgba(16, 24, 40, 0.08);
+            border-radius: 18px;
+            padding: 14px 16px;
+            font-size: 15px;
+            font-family: inherit;
+            color: var(--ink);
+            background: rgba(255, 255, 255, 0.95);
+            transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+        }
+
+        select:focus {
+            outline: none;
+            border-color: rgba(10, 132, 255, 0.32);
+            box-shadow: 0 0 0 5px rgba(10, 132, 255, 0.12);
+            transform: translateY(-1px);
+        }
+
         .hint {
             margin-top: 10px;
             font-size: 12px;
             line-height: 1.55;
             color: var(--muted);
+        }
+
+        .setting-stack {
+            margin-top: 14px;
+            padding-top: 14px;
+            border-top: 1px solid rgba(16, 24, 40, 0.05);
         }
 
         .actions {
@@ -282,7 +307,7 @@
 
         .stats {
             display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 10px;
         }
 
@@ -362,6 +387,20 @@
             <div class="hint">
                 只填站点地址，例如 <code>https://flow2api.example.com</code>。扩展会自动读取已登录控制台里的连接设置。
             </div>
+
+            <div class="setting-stack">
+                <label for="periodicSyncMinutes">后台保底刷新</label>
+                <select id="periodicSyncMinutes">
+                    <option value="60">每 1 小时</option>
+                    <option value="120">每 2 小时</option>
+                    <option value="240">每 4 小时</option>
+                    <option value="480">每 8 小时</option>
+                    <option value="720">每 12 小时</option>
+                </select>
+                <div class="hint" id="intervalHint">
+                    就算没有明显变化，扩展也会按这个间隔自动重刷一次。
+                </div>
+            </div>
         </div>
 
         <div class="status" id="status"></div>
@@ -388,8 +427,12 @@
                     <div class="stat-value" id="summaryEmail">等待识别</div>
                 </div>
                 <div class="stat">
-                    <div class="stat-label">刷新</div>
-                    <div class="stat-value" id="summaryExpires">未获取</div>
+                    <div class="stat-label">下次检查</div>
+                    <div class="stat-value" id="summaryNextCheck">未获取</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">策略</div>
+                    <div class="stat-value" id="summaryPolicy">未获取</div>
                 </div>
                 <div class="stat">
                     <div class="stat-label">上次同步</div>

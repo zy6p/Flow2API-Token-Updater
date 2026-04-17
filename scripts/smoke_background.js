@@ -1025,6 +1025,37 @@ async function testPassiveSetupDataDoesNotHydrateConnectionUntilExplicitRefresh(
     );
 }
 
+async function testCustomPeriodicSyncIntervalUpdatesScheduleAndSetupData() {
+    const harness = createHarness();
+    const background = loadBackground(harness);
+
+    await harness.localStorageArea.set({
+        configByStore: {
+            default: {
+                baseUrl: FLOW2API_ORIGIN,
+                connectionToken: 'connection-token'
+            }
+        }
+    });
+
+    const response = await background.updateSyncPreferences({
+        periodicSyncMinutes: 120,
+        cookieStoreId: 'default'
+    });
+
+    assert.equal(response.success, true);
+    assert.equal(response.preferences.periodicSyncMinutes, 120);
+    assert.equal(response.settings.periodicSyncMinutes, 120);
+    assert.equal(response.settings.nextScheduledReason, 'periodic');
+    assert.equal(response.settings.nextScheduledAt, '2026-01-01T02:00:00.000Z');
+    assert.equal(harness.alarms.length, 1);
+    assert.equal(
+        new Date(harness.alarms[0].when).toISOString(),
+        '2026-01-01T02:00:00.000Z',
+        'custom periodic sync preference should immediately update the next safety alarm'
+    );
+}
+
 async function testScheduledAlarmOnlySyncsDueStores() {
     const harness = createHarness({
         cookies: [
@@ -1608,6 +1639,7 @@ async function main() {
         ['detects an unsynced current Labs session instead of showing a stale account', testSetupDataDetectsUnsyncedCurrentSessionInsteadOfShowingStaleAccount],
         ['ignores legacy shared config when a fresh profile starts', testFreshProfileIgnoresLegacySharedConfig],
         ['keeps popup setup reads passive until the user explicitly refreshes state', testPassiveSetupDataDoesNotHydrateConnectionUntilExplicitRefresh],
+        ['lets users tighten the periodic safety sync cadence and exposes the next scheduled check', testCustomPeriodicSyncIntervalUpdatesScheduleAndSetupData],
         ['caps safety sync to four hours when admin expiry metadata is unavailable', testPerProfileConfigFallsBackToFourHourSafetySyncWithoutAdminSession],
         ['scheduled alarms only sync stores that are actually due', testScheduledAlarmOnlySyncsDueStores],
         ['ignores browser cookie marked expiry when planning automatic refresh', testSafetySyncIgnoresBrowserCookieMarkedExpiry],

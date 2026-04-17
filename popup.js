@@ -6,7 +6,10 @@ const state = {
     lastSync: null,
     browserInfo: null,
     hasConnection: false,
-    configSource: 'none'
+    configSource: 'none',
+    periodicSyncMinutes: 240,
+    nextScheduledAt: null,
+    nextScheduledReason: null
 };
 
 let statusTimer = null;
@@ -18,6 +21,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 function bindEvents() {
     document.getElementById('connectBtn').addEventListener('click', runPrimaryAction);
+    document.getElementById('periodicSyncMinutes').addEventListener('change', updateSyncPreferences);
     document.getElementById('refreshStatusBtn').addEventListener('click', refreshStatus);
     document.getElementById('consoleBtn').addEventListener('click', openConsole);
     document.getElementById('logsBtn').addEventListener('click', openLogs);
@@ -56,6 +60,9 @@ function applySetupResponse(response) {
     state.suggestedBaseUrl = response.suggestedBaseUrl || '';
     state.hasConnection = Boolean(response.hasConnection);
     state.configSource = response.settings?.configSource || 'none';
+    state.periodicSyncMinutes = normalizePeriodicSyncMinutes(response.settings?.periodicSyncMinutes);
+    state.nextScheduledAt = response.settings?.nextScheduledAt || null;
+    state.nextScheduledReason = response.settings?.nextScheduledReason || null;
 }
 
 function showStatusForCurrentState() {
@@ -82,8 +89,21 @@ function render(allowPrefill = false) {
         input.value = nextValue;
     }
 
+    renderPreferences();
     renderSummary();
     renderExperience();
+}
+
+function renderPreferences() {
+    const select = document.getElementById('periodicSyncMinutes');
+    const normalizedValue = String(normalizePeriodicSyncMinutes(state.periodicSyncMinutes));
+
+    if (select.value !== normalizedValue) {
+        select.value = normalizedValue;
+    }
+
+    document.getElementById('intervalHint').textContent =
+        `没检测到明显变化时，扩展仍会最多每 ${formatMinutesLabel(state.periodicSyncMinutes)} 自动重刷一次。`;
 }
 
 function renderSummary() {
@@ -124,15 +144,20 @@ function renderSummary() {
         : (state.suggestedBaseUrl || '未设置');
 
     document.getElementById('summaryEmail').textContent = lastSync?.email || '等待识别';
-    document.getElementById('summaryExpires').textContent = lastSync?.atExpires
-        ? formatDateTime(lastSync.atExpires)
-        : (hasConnection ? '后台最多 4 小时重刷' : '等待同步后获取');
+    document.getElementById('summaryNextCheck').textContent = state.nextScheduledAt
+        ? formatDateTime(state.nextScheduledAt)
+        : (hasConnection ? '等待排队' : '等待接入');
+    document.getElementById('summaryPolicy').textContent = hasConnection
+        ? describeScheduleReason(state.nextScheduledReason, state.periodicSyncMinutes)
+        : `保底 ${formatMinutesLabel(state.periodicSyncMinutes)}`;
     document.getElementById('summaryLastSync').textContent = formatDateTime(lastSync?.syncedAt);
-    document.getElementById('summaryMessage').textContent = lastSync?.message
-        || (hasConnection
-            ? 'Flow2API 已接入。这个 Profile 的 Google Labs 登录态有变化时，扩展会自动同步；就算没检测到变化，后台也会最多每 4 小时重刷一次。'
-            : '第一次只要确认一次 Flow2API 地址，后续同步会自动完成。');
-
+    document.getElementById('summaryMessage').textContent = buildSummaryMessage({
+        hasConnection,
+        lastSync,
+        periodicSyncMinutes: state.periodicSyncMinutes,
+        nextScheduledAt: state.nextScheduledAt,
+        nextScheduledReason: state.nextScheduledReason
+    });
 }
 
 function renderExperience() {
@@ -148,6 +173,7 @@ function getUiModel() {
     const hasBaseUrl = Boolean(state.baseUrl || state.suggestedBaseUrl);
     const hasConnection = Boolean(state.hasConnection);
     const lastSync = state.lastSync;
+    const periodicLabel = formatMinutesLabel(state.periodicSyncMinutes);
 
     if (!hasConnection) {
         return {
@@ -172,7 +198,7 @@ function getUiModel() {
     if (lastSync?.status === 'success') {
         return {
             title: '这个 Profile 已经就绪',
-            text: 'Google Labs 登录态有变化时，扩展会自动同步到 Flow2API；没有明显变化时，后台也会最多每 4 小时保底重刷一次。',
+            text: `Google Labs 登录态有变化时，扩展会自动同步到 Flow2API；没有明显变化时，后台也会最多每 ${periodicLabel} 保底重刷一次。`,
             actionLabel: '立即重新同步',
             actionNote: '只有在你刚切换 Labs 账号，或者想立刻刷新时，才需要点这一下。'
         };
@@ -193,7 +219,7 @@ function getUiModel() {
         title: '等你在这个 Profile 登录 Labs',
         text: 'Flow2API 已经接入。你在这个 Profile 登录 Google Labs 后，扩展会自动完成同步。',
         actionLabel: '同步这个 Profile',
-        actionNote: '如果你刚刚登录完成，点一下就会立刻检查，不用等后台自己发现。'
+        actionNote: `如果你刚刚登录完成，点一下就会立刻检查；否则后台也会最多每 ${periodicLabel} 自动重试。`
     };
 }
 
@@ -369,6 +395,35 @@ async function refreshStatus() {
     }
 }
 
+async function updateSyncPreferences(event) {
+    const requestedMinutes = normalizePeriodicSyncMinutes(Number(event.target.value));
+
+    try {
+        setBusy(true);
+        showStatus(`正在把后台保底刷新改成每 ${formatMinutesLabel(requestedMinutes)}...`, 'info');
+
+        const cookieStoreId = await getCurrentCookieStoreId();
+        const response = await extensionApi.runtime.sendMessage({
+            action: 'updateSyncPreferences',
+            cookieStoreId,
+            periodicSyncMinutes: requestedMinutes
+        });
+
+        if (!response?.success) {
+            throw new Error(response?.error || '更新后台刷新策略失败');
+        }
+
+        applySetupResponse(response);
+        render(true);
+        showStatus(`后台保底刷新已改成每 ${formatMinutesLabel(state.periodicSyncMinutes)}。`, 'success');
+    } catch (error) {
+        renderPreferences();
+        showStatus(error.message || '更新后台刷新策略失败', 'error');
+    } finally {
+        setBusy(false);
+    }
+}
+
 async function openLogs() {
     const logsUrl = extensionApi.runtime?.getURL
         ? extensionApi.runtime.getURL('logs.html')
@@ -476,6 +531,7 @@ function toOriginPattern(baseUrl) {
 
 function setBusy(isBusy) {
     document.getElementById('connectBtn').disabled = isBusy;
+    document.getElementById('periodicSyncMinutes').disabled = isBusy;
     document.getElementById('refreshStatusBtn').disabled = isBusy;
     document.getElementById('consoleBtn').disabled = isBusy || !hasConsoleTarget();
     document.getElementById('logsBtn').disabled = isBusy;
@@ -525,4 +581,63 @@ function formatDateTime(value) {
         minute: '2-digit',
         hour12: false
     }).replace(/\//g, '-');
+}
+
+function formatMinutesLabel(minutes) {
+    const normalized = normalizePeriodicSyncMinutes(minutes);
+    if (normalized % 60 === 0) {
+        return `${normalized / 60} 小时`;
+    }
+
+    return `${normalized} 分钟`;
+}
+
+function normalizePeriodicSyncMinutes(value) {
+    if (!Number.isFinite(value)) {
+        return 240;
+    }
+
+    return Math.min(720, Math.max(60, Math.round(value)));
+}
+
+function describeScheduleReason(reason, periodicSyncMinutes) {
+    switch (reason) {
+        case 'account_expiry':
+            return '按账号到期提前刷新';
+        case 'heuristic_probe':
+            return '按活跃度提前试探';
+        case 'waiting_session':
+            return '等待登录后短间隔重试';
+        case 'periodic':
+        default:
+            return `保底 ${formatMinutesLabel(periodicSyncMinutes)}`;
+    }
+}
+
+function buildSummaryMessage({
+    hasConnection,
+    lastSync,
+    periodicSyncMinutes,
+    nextScheduledAt,
+    nextScheduledReason
+}) {
+    if (!hasConnection) {
+        return '第一次只要确认一次 Flow2API 地址，后续同步会自动完成。';
+    }
+
+    const parts = [];
+
+    if (lastSync?.message) {
+        parts.push(lastSync.message);
+    } else if (lastSync?.atExpires) {
+        parts.push(`当前账号令牌预计在 ${formatDateTime(lastSync.atExpires)} 前后失效，扩展会提前刷新。`);
+    } else {
+        parts.push(`Flow2API 已接入；没有明显变化时，后台也会最多每 ${formatMinutesLabel(periodicSyncMinutes)} 保底重刷一次。`);
+    }
+
+    if (nextScheduledAt) {
+        parts.push(`下次后台检查预计在 ${formatDateTime(nextScheduledAt)}，当前策略是${describeScheduleReason(nextScheduledReason, periodicSyncMinutes)}。`);
+    }
+
+    return parts.join(' ');
 }

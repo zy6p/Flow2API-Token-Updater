@@ -21,10 +21,14 @@ const LAST_SYNC_BY_STORE_KEY = 'lastSyncByStore';
 const LAST_SYNC_BY_SESSION_KEY = 'lastSyncBySession';
 const SESSION_CONTEXT_BY_STORE_KEY = 'sessionContextByStore';
 const CONSOLE_CONTEXT_BY_STORE_KEY = 'consoleContextByStore';
+const SYNC_PREFERENCES_KEY = 'syncPreferences';
 const NEXT_SCHEDULED_AT_BY_STORE_KEY = 'nextScheduledAtByStore';
+const SCHEDULE_SCOPE_BY_STORE_KEY = 'scheduleScopeByStore';
 const UNSET_VALUE = Symbol('unsetValue');
 const SYNC_ALARM_NAME = 'flow2apiSafetySync';
 const DEFAULT_PERIODIC_SYNC_MINUTES = 240;
+const MIN_PERIODIC_SYNC_MINUTES = 60;
+const MAX_PERIODIC_SYNC_MINUTES = 720;
 const WAITING_RETRY_MINUTES = 5;
 const ACCESS_TOKEN_EARLY_REFRESH_MS = 10 * 60 * 1000;
 const ACCESS_TOKEN_MINIMUM_REFRESH_MS = 60 * 1000;
@@ -171,6 +175,11 @@ async function handleMessage(request = {}, sender = {}) {
                 allowSessionMetadataLookup: request.allowSessionMetadataLookup === true,
                 previewCurrentSession: request.previewCurrentSession !== false
             });
+        case 'updateSyncPreferences':
+            return updateSyncPreferences({
+                periodicSyncMinutes: request.periodicSyncMinutes,
+                cookieStoreId
+            });
         case 'connectBaseUrl':
             return connectBaseUrl(request.baseUrl, cookieStoreId);
         case 'syncNow':
@@ -233,6 +242,14 @@ async function getSetupData(cookieStoreId = null, {
     }
 
     const hydratedSettings = await loadSettings({ cookieStoreId });
+    const syncPreferences = await loadSyncPreferences();
+    const resolvedStoreKey = storeKeyFromCookieStoreId(
+        cookieStoreId
+        || hydratedSettings.sessionContext?.storeId
+        || hydratedSettings.consoleContext?.cookieStoreId
+        || null
+    );
+    const scheduledScopeByStore = await loadScheduledScopeByStore();
     let effectiveLastSync = hydratedSettings.lastSync;
 
     if (previewCurrentSession) {
@@ -249,10 +266,34 @@ async function getSetupData(cookieStoreId = null, {
 
     return {
         success: true,
-        settings: buildPublicSettings(hydratedSettings, { lastSync: effectiveLastSync }),
+        settings: buildPublicSettings(hydratedSettings, {
+            lastSync: effectiveLastSync,
+            syncPreferences,
+            scheduledScope: scheduledScopeByStore[resolvedStoreKey] || null
+        }),
         hasConnection: Boolean(hydratedSettings.connectionToken),
         browserInfo: await getBrowserInfoSafe(),
         suggestedBaseUrl
+    };
+}
+
+async function updateSyncPreferences({
+    periodicSyncMinutes,
+    cookieStoreId = null
+} = {}) {
+    const preferences = await saveSyncPreferences({
+        periodicSyncMinutes
+    });
+
+    await refreshSafetyAlarm({ cookieStoreId });
+
+    return {
+        ...(await getSetupData(cookieStoreId, {
+            previewCurrentSession: true,
+            refreshConnection: false,
+            allowSessionMetadataLookup: false
+        })),
+        preferences
     };
 }
 
@@ -1180,7 +1221,8 @@ async function refreshSafetyAlarm({
 
     if (!Number.isFinite(schedule.nextAlarmAt)) {
         await extensionApi.storage.local.set({
-            [NEXT_SCHEDULED_AT_BY_STORE_KEY]: {}
+            [NEXT_SCHEDULED_AT_BY_STORE_KEY]: {},
+            [SCHEDULE_SCOPE_BY_STORE_KEY]: {}
         });
         return;
     }
@@ -1193,6 +1235,8 @@ async function refreshSafetyAlarm({
         scopes: schedule.scopes.map((scope) => ({
             cookieStoreId: scope.cookieStoreId,
             scheduledAt: new Date(scope.scheduledAt).toISOString(),
+            reason: scope.reason,
+            periodicSyncMinutes: scope.periodicSyncMinutes,
             accountExpiryAt: scope.accountExpiryAt,
             browserCookieExpiryAt: scope.browserCookieExpiryAt,
             heuristicProbeAt: scope.heuristicProbeAt,
@@ -1230,7 +1274,8 @@ async function buildSafetySchedule({
     }
 
     const now = Date.now();
-    const periodicAt = now + DEFAULT_PERIODIC_SYNC_MINUTES * 60 * 1000;
+    const { periodicSyncMinutes } = await loadSyncPreferences();
+    const periodicAt = now + periodicSyncMinutes * 60 * 1000;
     const scopes = [];
 
     for (const currentCookieStoreId of targetStoreIds) {
@@ -1267,21 +1312,42 @@ async function buildSafetySchedule({
             ? now + WAITING_RETRY_MINUTES * 60 * 1000
             : null;
 
-        const scheduleCandidates = [periodicAt];
+        const scheduleCandidates = [{
+            reason: 'periodic',
+            when: periodicAt
+        }];
         if (accountRefreshAt) {
-            scheduleCandidates.push(accountRefreshAt);
+            scheduleCandidates.push({
+                reason: 'account_expiry',
+                when: accountRefreshAt
+            });
         }
         if (heuristicProbeAt) {
-            scheduleCandidates.push(heuristicProbeAt);
+            scheduleCandidates.push({
+                reason: 'heuristic_probe',
+                when: heuristicProbeAt
+            });
         }
         if (waitingRetryAt) {
-            scheduleCandidates.push(waitingRetryAt);
+            scheduleCandidates.push({
+                reason: 'waiting_session',
+                when: waitingRetryAt
+            });
         }
+        const selectedSchedule = scheduleCandidates.reduce((best, candidate) => {
+            if (!best || candidate.when < best.when) {
+                return candidate;
+            }
+
+            return best;
+        }, null);
 
         scopes.push({
             storeKey: storeKeyFromCookieStoreId(currentCookieStoreId),
             cookieStoreId: normalizeCookieStoreId(currentCookieStoreId) || null,
-            scheduledAt: Math.min(...scheduleCandidates),
+            scheduledAt: selectedSchedule?.when || periodicAt,
+            reason: selectedSchedule?.reason || 'periodic',
+            periodicSyncMinutes,
             accountExpiryAt: accountExpiryMs ? new Date(accountExpiryMs).toISOString() : null,
             browserCookieExpiryAt: browserCookieExpiryMs ? new Date(browserCookieExpiryMs).toISOString() : null,
             heuristicProbeAt: heuristicProbeAt ? new Date(heuristicProbeAt).toISOString() : null,
@@ -2144,19 +2210,28 @@ async function detectCurrentSessionState({
 }
 
 function buildPublicSettings(settings, {
-    lastSync = null
+    lastSync = null,
+    syncPreferences = null,
+    scheduledScope = null
 } = {}) {
+    const normalizedPreferences = normalizeSyncPreferences(syncPreferences);
+    const normalizedScheduledScope = normalizeScheduledScope(scheduledScope);
+
     return {
         baseUrl: settings?.baseUrl || '',
         lastSync,
         sessionContext: settings?.sessionContext || null,
         consoleContext: settings?.consoleContext || null,
-        configSource: settings?.configSource || 'none'
+        configSource: settings?.configSource || 'none',
+        periodicSyncMinutes: normalizedPreferences.periodicSyncMinutes,
+        nextScheduledAt: normalizedScheduledScope?.scheduledAt || null,
+        nextScheduledReason: normalizedScheduledScope?.reason || null
     };
 }
 
 async function saveScheduledAtByStore(scopes) {
     const nextScheduledAtByStore = {};
+    const scheduleScopeByStore = {};
 
     for (const scope of scopes) {
         if (!scope?.storeKey || !Number.isFinite(scope.scheduledAt)) {
@@ -2164,10 +2239,21 @@ async function saveScheduledAtByStore(scopes) {
         }
 
         nextScheduledAtByStore[scope.storeKey] = scope.scheduledAt;
+        scheduleScopeByStore[scope.storeKey] = normalizeScheduledScope({
+            scheduledAt: new Date(scope.scheduledAt).toISOString(),
+            reason: scope.reason,
+            periodicSyncMinutes: scope.periodicSyncMinutes,
+            accountExpiryAt: scope.accountExpiryAt,
+            browserCookieExpiryAt: scope.browserCookieExpiryAt,
+            heuristicProbeAt: scope.heuristicProbeAt,
+            periodicSyncAt: scope.periodicSyncAt,
+            waitingRetryAt: scope.waitingRetryAt
+        });
     }
 
     await extensionApi.storage.local.set({
-        [NEXT_SCHEDULED_AT_BY_STORE_KEY]: nextScheduledAtByStore
+        [NEXT_SCHEDULED_AT_BY_STORE_KEY]: nextScheduledAtByStore,
+        [SCHEDULE_SCOPE_BY_STORE_KEY]: scheduleScopeByStore
     });
 }
 
@@ -2185,6 +2271,97 @@ async function loadScheduledAtByStore() {
     }
 
     return normalized;
+}
+
+async function loadScheduledScopeByStore() {
+    const { [SCHEDULE_SCOPE_BY_STORE_KEY]: stored = {} } = await extensionApi.storage.local.get([SCHEDULE_SCOPE_BY_STORE_KEY]);
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) {
+        return {};
+    }
+
+    return Object.fromEntries(
+        Object.entries(stored)
+            .map(([storeKey, value]) => [storeKeyFromCookieStoreId(cookieStoreIdFromStoreKey(storeKey)), normalizeScheduledScope(value)])
+            .filter(([, value]) => Boolean(value))
+    );
+}
+
+async function loadSyncPreferences() {
+    const { [SYNC_PREFERENCES_KEY]: stored = {} } = await extensionApi.storage.local.get([SYNC_PREFERENCES_KEY]);
+    return normalizeSyncPreferences(stored);
+}
+
+async function saveSyncPreferences({
+    periodicSyncMinutes = DEFAULT_PERIODIC_SYNC_MINUTES
+} = {}) {
+    const preferences = normalizeSyncPreferences({
+        periodicSyncMinutes
+    });
+
+    await extensionApi.storage.local.set({
+        [SYNC_PREFERENCES_KEY]: preferences
+    });
+
+    return preferences;
+}
+
+function normalizeSyncPreferences(value) {
+    const periodicSyncMinutes = normalizePeriodicSyncMinutes(value?.periodicSyncMinutes);
+
+    return {
+        periodicSyncMinutes
+    };
+}
+
+function normalizePeriodicSyncMinutes(value) {
+    if (!Number.isFinite(value)) {
+        return DEFAULT_PERIODIC_SYNC_MINUTES;
+    }
+
+    return clampNumber(
+        Math.round(value),
+        MIN_PERIODIC_SYNC_MINUTES,
+        MAX_PERIODIC_SYNC_MINUTES
+    );
+}
+
+function normalizeScheduledScope(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return null;
+    }
+
+    const scheduledAt = parseDateSafe(value.scheduledAt);
+    if (!Number.isFinite(scheduledAt)) {
+        return null;
+    }
+
+    return {
+        scheduledAt: new Date(scheduledAt).toISOString(),
+        reason: normalizeScheduleReason(value.reason),
+        periodicSyncMinutes: normalizePeriodicSyncMinutes(value.periodicSyncMinutes),
+        accountExpiryAt: normalizeOptionalIsoString(value.accountExpiryAt),
+        browserCookieExpiryAt: normalizeOptionalIsoString(value.browserCookieExpiryAt),
+        heuristicProbeAt: normalizeOptionalIsoString(value.heuristicProbeAt),
+        periodicSyncAt: normalizeOptionalIsoString(value.periodicSyncAt),
+        waitingRetryAt: normalizeOptionalIsoString(value.waitingRetryAt)
+    };
+}
+
+function normalizeOptionalIsoString(value) {
+    const parsed = parseDateSafe(value);
+    return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
+function normalizeScheduleReason(value) {
+    switch (value) {
+        case 'periodic':
+        case 'account_expiry':
+        case 'heuristic_probe':
+        case 'waiting_session':
+            return value;
+        default:
+            return null;
+    }
 }
 
 function normalizeScopedConfig(value) {
