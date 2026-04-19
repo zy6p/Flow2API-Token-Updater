@@ -56,11 +56,15 @@ CHROMIUM_SHA256="$(hash_file "${OUT_DIR}/downloads/${CHROMIUM_VERSIONED_FILE}")"
 
 GECKO_SELFHOST_SHA256=""
 GECKO_SELFHOST_UPDATE_URL=""
+GECKO_SELFHOST_AVAILABLE="0"
 if [[ -f "${FIREFOX_DIR}/${GECKO_SELFHOST_XPI}" ]]; then
   cp "${FIREFOX_DIR}/${GECKO_SELFHOST_XPI}" "${OUT_DIR}/downloads/latest-firefox-selfhost.xpi"
   cp "${FIREFOX_DIR}/${GECKO_SELFHOST_XPI}" "${OUT_DIR}/downloads/${GECKO_SELFHOST_XPI}"
   GECKO_SELFHOST_SHA256="$(hash_file "${OUT_DIR}/downloads/${GECKO_SELFHOST_XPI}")"
   GECKO_SELFHOST_UPDATE_URL="${PUBLIC_BASE_URL}/downloads/updates.json"
+  GECKO_SELFHOST_AVAILABLE="1"
+else
+  printf 'Warning: Firefox self-hosted XPI not found at %s; download page will fall back to latest-firefox.xpi.\n' "${FIREFOX_DIR}/${GECKO_SELFHOST_XPI}" >&2
 fi
 
 ROOT_DIR="${ROOT_DIR}" BUILD_DATE="${BUILD_DATE}" GECKO_TEMP_FILE="${GECKO_TEMP_FILE}" CHROMIUM_VERSIONED_FILE="${CHROMIUM_VERSIONED_FILE}" GECKO_SHA256="${GECKO_SHA256}" CHROMIUM_SHA256="${CHROMIUM_SHA256}" GECKO_SELFHOST_XPI="${GECKO_SELFHOST_XPI}" GECKO_SELFHOST_SHA256="${GECKO_SELFHOST_SHA256}" GECKO_SELFHOST_UPDATE_URL="${GECKO_SELFHOST_UPDATE_URL}" SELFHOST_VERSION="${SELFHOST_VERSION}" node <<'EOF' > "${OUT_DIR}/downloads/latest.json"
@@ -165,7 +169,7 @@ if [[ -n "${GECKO_SELFHOST_SHA256}" ]]; then
 ' "${GECKO_SELFHOST_SHA256}" "${GECKO_SELFHOST_XPI}" >> "${OUT_DIR}/downloads/SHA256SUMS"
 fi
 
-ROOT_DIR="${ROOT_DIR}" OUT_DIR="${OUT_DIR}" VERSION="${VERSION}" BUILD_DATE="${BUILD_DATE}" GECKO_TEMP_FILE="${GECKO_TEMP_FILE}" CHROMIUM_VERSIONED_FILE="${CHROMIUM_VERSIONED_FILE}" GECKO_SELFHOST_XPI="${GECKO_SELFHOST_XPI}" GECKO_SELFHOST_UPDATE_URL="${GECKO_SELFHOST_UPDATE_URL}" SELFHOST_VERSION="${SELFHOST_VERSION}" node <<'EOF'
+ROOT_DIR="${ROOT_DIR}" OUT_DIR="${OUT_DIR}" VERSION="${VERSION}" BUILD_DATE="${BUILD_DATE}" GECKO_TEMP_FILE="${GECKO_TEMP_FILE}" CHROMIUM_VERSIONED_FILE="${CHROMIUM_VERSIONED_FILE}" GECKO_SELFHOST_XPI="${GECKO_SELFHOST_XPI}" GECKO_SELFHOST_UPDATE_URL="${GECKO_SELFHOST_UPDATE_URL}" SELFHOST_VERSION="${SELFHOST_VERSION}" GECKO_SELFHOST_AVAILABLE="${GECKO_SELFHOST_AVAILABLE}" node <<'EOF'
 const fs = require('fs');
 const path = require('path');
 
@@ -173,14 +177,46 @@ const templatePath = path.join(process.env.ROOT_DIR, 'cloudflare-pages', 'index.
 const outputPath = path.join(process.env.OUT_DIR, 'index.html');
 
 let html = fs.readFileSync(templatePath, 'utf8');
+const hasSelfhost = `${process.env.GECKO_SELFHOST_AVAILABLE || ''}` === '1';
+const selfhostFile = process.env.GECKO_SELFHOST_XPI || '未生成';
+const selfhostVersion = process.env.SELFHOST_VERSION || '未生成';
+const selfhostUpdatesUrl = process.env.GECKO_SELFHOST_UPDATE_URL || '当前未生成';
+
 const replacements = {
   '__FLOW2API_VERSION__': process.env.VERSION,
   '__FLOW2API_BUILD_DATE__': process.env.BUILD_DATE,
   '__FLOW2API_GECKO_VERSIONED_FILE__': process.env.GECKO_TEMP_FILE,
   '__FLOW2API_CHROMIUM_VERSIONED_FILE__': process.env.CHROMIUM_VERSIONED_FILE,
-  '__FLOW2API_GECKO_SELFHOST_FILE__': process.env.GECKO_SELFHOST_XPI || '未生成',
-  '__FLOW2API_GECKO_SELFHOST_VERSION__': process.env.SELFHOST_VERSION || '未生成',
-  '__FLOW2API_GECKO_SELFHOST_UPDATES_URL__': process.env.GECKO_SELFHOST_UPDATE_URL || '需要先生成签名自更新包'
+  '__FLOW2API_GECKO_SELFHOST_FILE__': selfhostFile,
+  '__FLOW2API_GECKO_SELFHOST_VERSION__': selfhostVersion,
+  '__FLOW2API_GECKO_SELFHOST_UPDATES_URL__': selfhostUpdatesUrl,
+  '__FLOW2API_FIREFOX_PRIMARY_MESSAGE__': hasSelfhost
+    ? '<p class="ok">Firefox / Zen 现在优先推荐“签名自动更新版”；只有调试开发时才建议用临时加载包。</p>'
+    : '<p class="ok">当前还没有生成 Firefox / Zen 签名自动更新版；请先使用普通 Firefox XPI，或临时加载包调试。</p>',
+  '__FLOW2API_FIREFOX_PRIMARY_URL__': hasSelfhost
+    ? '/downloads/latest-firefox-selfhost.xpi'
+    : '/downloads/latest-firefox.xpi',
+  '__FLOW2API_FIREFOX_PRIMARY_LABEL__': hasSelfhost
+    ? '下载 Firefox / Zen 签名自动更新版'
+    : '下载 Firefox / Zen 普通 XPI',
+  '__FLOW2API_FIREFOX_SELFHOST_META__': hasSelfhost
+    ? '<p class="meta">备用文件：<a href="/downloads/latest-firefox.xpi">未签名 Firefox XPI</a> / <a href="/downloads/latest-firefox.zip">Firefox ZIP</a></p>'
+    : '<p class="meta">当前未生成签名自动更新版。可先使用 <a href="/downloads/latest-firefox.xpi">普通 Firefox XPI</a> 或 <a href="/downloads/latest-firefox.zip">Firefox ZIP</a>。</p>',
+  '__FLOW2API_FIREFOX_SELFHOST_VERSIONED_ENTRY__': hasSelfhost
+    ? `<a href="/downloads/${selfhostFile}">版本化 Firefox / Zen 自更新包：<span class="mono">${selfhostFile}</span></a><div class="meta">自更新轨道版本：<span class="mono">${selfhostVersion}</span></div>`
+    : '<div class="meta">Firefox / Zen 自更新签名包：当前未生成</div>',
+  '__FLOW2API_FIREFOX_UPDATES_ENTRY__': hasSelfhost
+    ? '<a href="/downloads/updates.json">Firefox / Zen 更新清单：<span class="mono">updates.json</span></a>'
+    : '<div class="meta">Firefox / Zen 更新清单：当前未生成，因为签名自更新包还没产出。</div>',
+  '__FLOW2API_FIREFOX_RECOMMENDATION__': hasSelfhost
+    ? '长期使用、多 profile 部署：安装签名自动更新版，后续更新由浏览器自动拉取。'
+    : '当前优先使用普通 Firefox XPI；签名自动更新版还没产出前，不要把首页入口当成长期自动更新渠道。',
+  '__FLOW2API_FIREFOX_UPDATE_HINT__': hasSelfhost
+    ? `签名自动更新版的内置更新地址：<code>${selfhostUpdatesUrl}</code>`
+    : '签名自动更新版还没生成时，不会提供 updates.json；这是正常的回退状态，不会再给你死链接。',
+  '__FLOW2API_FIREFOX_INSTALL_INSTRUCTION__': hasSelfhost
+    ? 'Firefox / Zen 自动更新版：下载 <code>latest-firefox-selfhost.xpi</code>，通过文件安装或拖入浏览器扩展页。'
+    : 'Firefox / Zen 普通 XPI：下载 <code>latest-firefox.xpi</code>，通过文件安装或拖入浏览器扩展页；等签名自动更新版生成后再切换。'
 };
 
 for (const [needle, value] of Object.entries(replacements)) {

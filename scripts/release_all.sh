@@ -24,6 +24,8 @@ remote_repo_slug() {
 }
 
 VERSION="$(node -p "require('${ROOT_DIR}/manifest.json').version")"
+SELFHOST_VERSION="${FLOW2API_GECKO_SELFHOST_VERSION:-${VERSION}.2}"
+SELFHOST_XPI="dist/firefox/flow2api_token_updater-selfhost-${SELFHOST_VERSION}.xpi"
 TAG_NAME="${RELEASE_TAG:-${VERSION}}"
 TARGET_BRANCH="${RELEASE_TARGET_BRANCH:-main}"
 SOURCE_BRANCH="${RELEASE_SOURCE_BRANCH:-$(git branch --show-current)}"
@@ -33,6 +35,7 @@ ORIGIN_REPO="${RELEASE_GH_REPO:-$(remote_repo_slug "${ORIGIN_REMOTE}")}"
 UPSTREAM_REPO="${RELEASE_UPSTREAM_REPO:-$(remote_repo_slug "${UPSTREAM_REMOTE}" 2>/dev/null || true)}"
 PAGES_PROJECT="${CF_PAGES_PROJECT:-banana-rematrixed-com}"
 RELEASE_WITH_AMO_LISTED="${RELEASE_WITH_AMO_LISTED:-0}"
+RELEASE_REQUIRE_SELFHOST="${RELEASE_REQUIRE_SELFHOST:-1}"
 HEAD_SHA=""
 
 if [[ -z "${ORIGIN_REPO}" ]]; then
@@ -62,6 +65,12 @@ else
   echo "Skipping AMO listed release; set RELEASE_WITH_AMO_LISTED=1 to enable it"
 fi
 ./scripts/build_cloudflare_pages.sh
+
+if [[ "${RELEASE_REQUIRE_SELFHOST}" == "1" && ! -f "${SELFHOST_XPI}" ]]; then
+  echo "Missing Firefox self-hosted XPI: ${SELFHOST_XPI}" >&2
+  echo "Run scripts/sign_amo_unlisted.sh successfully first, or set RELEASE_REQUIRE_SELFHOST=0 to release without the auto-update Firefox bundle." >&2
+  exit 1
+fi
 
 HEAD_SHA="$(git rev-parse HEAD)"
 
@@ -100,11 +109,17 @@ RELEASE_ASSETS=(
   "dist/firefox/flow2api_token_updater-${VERSION}.xpi"
   "dist/firefox/flow2api_token_updater-${VERSION}.zip"
   "dist/firefox/flow2api_token_updater-gecko-temp-${VERSION}.zip"
-  "dist/firefox/flow2api_token_updater-selfhost-${VERSION}.2.xpi"
   ".cloudflare-pages/downloads/latest.json"
   ".cloudflare-pages/downloads/SHA256SUMS"
-  ".cloudflare-pages/downloads/updates.json"
 )
+
+if [[ -f "${SELFHOST_XPI}" ]]; then
+  RELEASE_ASSETS+=("${SELFHOST_XPI}")
+fi
+
+if [[ -f ".cloudflare-pages/downloads/updates.json" ]]; then
+  RELEASE_ASSETS+=(".cloudflare-pages/downloads/updates.json")
+fi
 
 if [[ "${RELEASE_WITH_AMO_LISTED}" == "1" ]]; then
   RELEASE_ASSETS+=(

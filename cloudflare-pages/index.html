@@ -200,24 +200,18 @@
         <section class="grid">
             <article class="card">
                 <h2>下载</h2>
-                <p class="ok">Firefox / Zen 现在优先推荐“签名自动更新版”；只有调试开发时才建议用临时加载包。</p>
+                __FLOW2API_FIREFOX_PRIMARY_MESSAGE__
                 <div class="actions">
-                    <a class="btn btn-primary" href="/downloads/latest-firefox-selfhost.xpi">下载 Firefox / Zen 签名自动更新版</a>
+                    <a class="btn btn-primary" href="__FLOW2API_FIREFOX_PRIMARY_URL__">__FLOW2API_FIREFOX_PRIMARY_LABEL__</a>
                     <a class="btn btn-secondary" href="/downloads/latest-gecko-temporary.zip">下载 Firefox / Zen 临时加载包</a>
                     <a class="btn btn-secondary" href="/downloads/latest-chromium.zip">下载 Chromium ZIP</a>
                 </div>
-                <p class="meta">
-                    备用文件：
-                    <a href="/downloads/latest-firefox.xpi">未签名 Firefox XPI</a>
-                    /
-                    <a href="/downloads/latest-firefox.zip">Firefox ZIP</a>
-                </p>
+                __FLOW2API_FIREFOX_SELFHOST_META__
                 <div class="link-list">
-                    <a href="/downloads/__FLOW2API_GECKO_SELFHOST_FILE__">版本化 Firefox / Zen 自更新包：<span class="mono">__FLOW2API_GECKO_SELFHOST_FILE__</span></a>
-                    <div class="meta">自更新轨道版本：<span class="mono">__FLOW2API_GECKO_SELFHOST_VERSION__</span></div>
+                    __FLOW2API_FIREFOX_SELFHOST_VERSIONED_ENTRY__
                     <a href="/downloads/__FLOW2API_GECKO_VERSIONED_FILE__">版本化 Gecko 临时包：<span class="mono">__FLOW2API_GECKO_VERSIONED_FILE__</span></a>
                     <a href="/downloads/__FLOW2API_CHROMIUM_VERSIONED_FILE__">版本化 Chromium 包：<span class="mono">__FLOW2API_CHROMIUM_VERSIONED_FILE__</span></a>
-                    <a href="/downloads/updates.json">Firefox / Zen 更新清单：<span class="mono">updates.json</span></a>
+                    __FLOW2API_FIREFOX_UPDATES_ENTRY__
                     <a href="/downloads/latest.json">发布元数据：<span class="mono">latest.json</span></a>
                     <a href="/downloads/SHA256SUMS">校验文件：<span class="mono">SHA256SUMS</span></a>
                 </div>
@@ -227,9 +221,9 @@
             <article class="card">
                 <h2>Firefox / Zen 安装建议</h2>
                 <ul>
-                    <li>长期使用、多 profile 部署：安装签名自动更新版，后续更新由浏览器自动拉取。</li>
+                    <li>__FLOW2API_FIREFOX_RECOMMENDATION__</li>
                     <li>调试开发：使用临时加载包，在 <code>about:debugging#/runtime/this-firefox</code> 手动加载。</li>
-                    <li>签名自动更新版的内置更新地址：<code>__FLOW2API_GECKO_SELFHOST_UPDATES_URL__</code></li>
+                    <li>__FLOW2API_FIREFOX_UPDATE_HINT__</li>
                     <li>如果浏览器提示站点访问权限，请直接允许“所有网站”，后续不用为每个 Flow2API 域名单独授权。</li>
                 </ul>
             </article>
@@ -239,7 +233,7 @@
             <article class="card">
                 <h2>安装说明</h2>
                 <ul>
-                    <li>Firefox / Zen 自动更新版：下载 <code>latest-firefox-selfhost.xpi</code>，通过文件安装或拖入浏览器扩展页。</li>
+                    <li>__FLOW2API_FIREFOX_INSTALL_INSTRUCTION__</li>
                     <li>Firefox / Zen 临时加载包：打开 <code>about:debugging#/runtime/this-firefox</code>，点击 <code>Load Temporary Add-on</code>，选择解压目录中的 <code>manifest.json</code>。</li>
                     <li>Chromium：解压 ZIP，在 <code>chrome://extensions</code> 开启开发者模式，点击“加载已解压的扩展程序”。</li>
                     <li>如果需要可验证文件完整性，对照 <code>SHA256SUMS</code> 或读取 <code>latest.json</code> / <code>updates.json</code> 中记录的版本与 SHA-256。</li>
