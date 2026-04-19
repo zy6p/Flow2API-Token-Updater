@@ -106,8 +106,6 @@ trap 'rm -f "${RELEASE_NOTES_FILE}"' EXIT
 
 RELEASE_ASSETS=(
   "dist/chromium/Flow2API-Token-Updater-chromium-${VERSION}.zip"
-  "dist/firefox/flow2api_token_updater-${VERSION}.xpi"
-  "dist/firefox/flow2api_token_updater-${VERSION}.zip"
   "dist/firefox/flow2api_token_updater-gecko-temp-${VERSION}.zip"
   ".cloudflare-pages/downloads/latest.json"
   ".cloudflare-pages/downloads/SHA256SUMS"

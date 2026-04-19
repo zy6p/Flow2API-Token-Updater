@@ -36,16 +36,6 @@ mkdir -p "${OUT_DIR}/downloads"
 cp "${ROOT_DIR}/privacy.html" "${OUT_DIR}/privacy.html"
 cp "${ROOT_DIR}/cloudflare-pages/_headers" "${OUT_DIR}/_headers"
 
-if [[ -f "${FIREFOX_DIR}/${GECKO_RELEASE_XPI}" ]]; then
-  cp "${FIREFOX_DIR}/${GECKO_RELEASE_XPI}" "${OUT_DIR}/downloads/latest-firefox.xpi"
-  cp "${FIREFOX_DIR}/${GECKO_RELEASE_XPI}" "${OUT_DIR}/downloads/${GECKO_RELEASE_XPI}"
-fi
-
-if [[ -f "${FIREFOX_DIR}/${GECKO_RELEASE_ZIP}" ]]; then
-  cp "${FIREFOX_DIR}/${GECKO_RELEASE_ZIP}" "${OUT_DIR}/downloads/latest-firefox.zip"
-  cp "${FIREFOX_DIR}/${GECKO_RELEASE_ZIP}" "${OUT_DIR}/downloads/${GECKO_RELEASE_ZIP}"
-fi
-
 cp "${FIREFOX_DIR}/${GECKO_TEMP_FILE}" "${OUT_DIR}/downloads/latest-gecko-temporary.zip"
 cp "${FIREFOX_DIR}/${GECKO_TEMP_FILE}" "${OUT_DIR}/downloads/${GECKO_TEMP_FILE}"
 cp "${CHROMIUM_DIR}/${CHROMIUM_VERSIONED_FILE}" "${OUT_DIR}/downloads/latest-chromium.zip"
@@ -64,7 +54,7 @@ if [[ -f "${FIREFOX_DIR}/${GECKO_SELFHOST_XPI}" ]]; then
   GECKO_SELFHOST_UPDATE_URL="${PUBLIC_BASE_URL}/downloads/updates.json"
   GECKO_SELFHOST_AVAILABLE="1"
 else
-  printf 'Warning: Firefox self-hosted XPI not found at %s; download page will fall back to latest-firefox.xpi.\n' "${FIREFOX_DIR}/${GECKO_SELFHOST_XPI}" >&2
+  printf 'Warning: Firefox self-hosted XPI not found at %s; download page will only expose the temporary Gecko bundle.\n' "${FIREFOX_DIR}/${GECKO_SELFHOST_XPI}" >&2
 fi
 
 ROOT_DIR="${ROOT_DIR}" BUILD_DATE="${BUILD_DATE}" GECKO_TEMP_FILE="${GECKO_TEMP_FILE}" CHROMIUM_VERSIONED_FILE="${CHROMIUM_VERSIONED_FILE}" GECKO_SHA256="${GECKO_SHA256}" CHROMIUM_SHA256="${CHROMIUM_SHA256}" GECKO_SELFHOST_XPI="${GECKO_SELFHOST_XPI}" GECKO_SELFHOST_SHA256="${GECKO_SELFHOST_SHA256}" GECKO_SELFHOST_UPDATE_URL="${GECKO_SELFHOST_UPDATE_URL}" SELFHOST_VERSION="${SELFHOST_VERSION}" node <<'EOF' > "${OUT_DIR}/downloads/latest.json"
@@ -192,16 +182,16 @@ const replacements = {
   '__FLOW2API_GECKO_SELFHOST_UPDATES_URL__': selfhostUpdatesUrl,
   '__FLOW2API_FIREFOX_PRIMARY_MESSAGE__': hasSelfhost
     ? '<p class="ok">Firefox / Zen 现在优先推荐“签名自动更新版”；只有调试开发时才建议用临时加载包。</p>'
-    : '<p class="ok">当前还没有生成 Firefox / Zen 签名自动更新版；请先使用普通 Firefox XPI，或临时加载包调试。</p>',
+    : '<p class="ok">当前还没有生成 Firefox / Zen 签名自动更新版。不要给普通用户分发未签名包；下方只保留开发调试用临时加载包。</p>',
   '__FLOW2API_FIREFOX_PRIMARY_URL__': hasSelfhost
     ? '/downloads/latest-firefox-selfhost.xpi'
-    : '/downloads/latest-firefox.xpi',
+    : '/downloads/latest-gecko-temporary.zip',
   '__FLOW2API_FIREFOX_PRIMARY_LABEL__': hasSelfhost
     ? '下载 Firefox / Zen 签名自动更新版'
-    : '下载 Firefox / Zen 普通 XPI',
+    : '下载 Firefox / Zen 临时调试包（仅开发）',
   '__FLOW2API_FIREFOX_SELFHOST_META__': hasSelfhost
-    ? '<p class="meta">备用文件：<a href="/downloads/latest-firefox.xpi">未签名 Firefox XPI</a> / <a href="/downloads/latest-firefox.zip">Firefox ZIP</a></p>'
-    : '<p class="meta">当前未生成签名自动更新版。可先使用 <a href="/downloads/latest-firefox.xpi">普通 Firefox XPI</a> 或 <a href="/downloads/latest-firefox.zip">Firefox ZIP</a>。</p>',
+    ? '<p class="meta">签名自动更新版已生成；调试开发时仍可使用临时加载包。</p>'
+    : '<p class="meta">签名自动更新版未生成前，不再暴露未签名 Firefox XPI/ZIP 下载入口。</p>',
   '__FLOW2API_FIREFOX_SELFHOST_VERSIONED_ENTRY__': hasSelfhost
     ? `<a href="/downloads/${selfhostFile}">版本化 Firefox / Zen 自更新包：<span class="mono">${selfhostFile}</span></a><div class="meta">自更新轨道版本：<span class="mono">${selfhostVersion}</span></div>`
     : '<div class="meta">Firefox / Zen 自更新签名包：当前未生成</div>',
@@ -210,13 +200,13 @@ const replacements = {
     : '<div class="meta">Firefox / Zen 更新清单：当前未生成，因为签名自更新包还没产出。</div>',
   '__FLOW2API_FIREFOX_RECOMMENDATION__': hasSelfhost
     ? '长期使用、多 profile 部署：安装签名自动更新版，后续更新由浏览器自动拉取。'
-    : '当前优先使用普通 Firefox XPI；签名自动更新版还没产出前，不要把首页入口当成长期自动更新渠道。',
+    : '签名自动更新版还没产出前，不要给普通用户分发 Firefox 构建；此时只保留开发调试用临时包。',
   '__FLOW2API_FIREFOX_UPDATE_HINT__': hasSelfhost
     ? `签名自动更新版的内置更新地址：<code>${selfhostUpdatesUrl}</code>`
-    : '签名自动更新版还没生成时，不会提供 updates.json；这是正常的回退状态，不会再给你死链接。',
+    : '签名自动更新版还没生成时，不会提供 updates.json，也不会再暴露未签名安装入口。',
   '__FLOW2API_FIREFOX_INSTALL_INSTRUCTION__': hasSelfhost
     ? 'Firefox / Zen 自动更新版：下载 <code>latest-firefox-selfhost.xpi</code>，通过文件安装或拖入浏览器扩展页。'
-    : 'Firefox / Zen 普通 XPI：下载 <code>latest-firefox.xpi</code>，通过文件安装或拖入浏览器扩展页；等签名自动更新版生成后再切换。'
+    : 'Firefox / Zen 调试构建：下载 <code>latest-gecko-temporary.zip</code>，仅用于临时加载调试；正式给用户安装时，必须等待签名自动更新版生成。'
 };
 
 for (const [needle, value] of Object.entries(replacements)) {
