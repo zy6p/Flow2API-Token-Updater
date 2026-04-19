@@ -1,0 +1,9 @@
+{
+  "name": "flow2api-token-updater",
+  "private": true,
+  "scripts": {
+    "test": "npm run test:unit && npm run test:smoke",
+    "test:unit": "node --test tests/*.test.js",
+    "test:smoke": "node scripts/smoke_background.js"
+  }
+}

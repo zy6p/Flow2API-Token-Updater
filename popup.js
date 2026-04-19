@@ -6,6 +6,8 @@ const state = {
     lastSync: null,
     browserInfo: null,
     hasConnection: false,
+    hasAdminToken: false,
+    hasCachedConnectionToken: false,
     configSource: 'none',
     periodicSyncMinutes: 240,
     nextScheduledAt: null,
@@ -59,6 +61,8 @@ function applySetupResponse(response) {
     state.browserInfo = response.browserInfo || null;
     state.suggestedBaseUrl = response.suggestedBaseUrl || '';
     state.hasConnection = Boolean(response.hasConnection);
+    state.hasAdminToken = Boolean(response.hasAdminToken);
+    state.hasCachedConnectionToken = Boolean(response.hasCachedConnectionToken);
     state.configSource = response.settings?.configSource || 'none';
     state.periodicSyncMinutes = normalizePeriodicSyncMinutes(response.settings?.periodicSyncMinutes);
     state.nextScheduledAt = response.settings?.nextScheduledAt || null;
@@ -67,15 +71,17 @@ function applySetupResponse(response) {
 
 function showStatusForCurrentState() {
     if (state.lastSync?.status === 'success') {
-        showStatus('这个 Profile 已经就绪。', 'success');
+        showStatus('当前 store 已经由全局配置接管。', 'success');
     } else if (state.lastSync?.status === 'detected_session') {
         showStatus(state.lastSync.message || '检测到当前账号，点一下就可以同步这个账号。', 'info');
     } else if (state.lastSync?.status === 'error') {
         showStatus(state.lastSync.message || '这次同步没有完成。', 'error');
     } else if (state.lastSync?.status === 'waiting_session' || state.hasConnection) {
-        showStatus(state.lastSync?.message || 'Flow2API 已接入，等你在这个 Profile 登录 Labs。', 'info');
+        showStatus(state.lastSync?.message || '全局控制面已配置，等你在当前 store 登录 Labs。', 'info');
+    } else if (state.baseUrl && !state.hasAdminToken) {
+        showStatus('还差一个 Flow2API Admin Token，填好后扩展才能全局管理自动刷新。', 'info');
     } else if (state.baseUrl) {
-        showStatus('确认这个地址后，就可以把当前 Profile 接到 Flow2API。', 'info');
+        showStatus('补上 Admin Token 后，就可以让扩展接管自动同步。', 'info');
     } else {
         hideStatusSoon();
     }
@@ -88,6 +94,17 @@ function render(allowPrefill = false) {
     if (allowPrefill || !input.value.trim()) {
         input.value = nextValue;
     }
+
+    const adminTokenInput = document.getElementById('adminToken');
+    if (!document.activeElement || document.activeElement !== adminTokenInput) {
+        adminTokenInput.value = '';
+    }
+    adminTokenInput.placeholder = state.hasAdminToken
+        ? '已保存，留空表示保持不变'
+        : '输入后只保存，不会回显';
+    document.getElementById('adminTokenHint').textContent = state.hasAdminToken
+        ? '已保存全局 Admin Token。留空不会覆盖；重新输入则会更新。'
+        : '填一次即可。后续连接 token 会由扩展自动通过 API 获取和刷新。';
 
     renderPreferences();
     renderSummary();
@@ -112,26 +129,30 @@ function renderSummary() {
         : '当前浏览器';
 
     document.getElementById('browserHint').textContent =
-        `${browserName} 里的真实 Profile 彼此隔离；在 Firefox / Zen 里，不同容器 / cookie store 会分别维护自己的 Labs 会话和最近同步状态，但同一个浏览器里的 Flow2API 连接配置可以复用。扩展只会同步当前这个页面所属的账号。`;
+        `${browserName} 里的真实浏览器 Profile 彼此隔离；当前扩展实例会统一管理这个浏览器 Profile 里的各个 cookie store / container，但不会跨真实 Profile 共享运行状态。`;
 
     const hasBaseUrl = Boolean(state.baseUrl);
     const hasConnection = Boolean(state.hasConnection);
+    const globallyReady = Boolean(state.baseUrl && state.hasAdminToken);
     const lastSync = state.lastSync;
 
     let stateLabel = '未接入';
     let stateClass = 'waiting';
 
-    if (hasConnection && lastSync?.status === 'error') {
+    if (globallyReady && lastSync?.status === 'error') {
         stateLabel = '需要处理';
         stateClass = 'warning';
-    } else if (hasConnection) {
-        stateLabel = '已接入';
+    } else if (globallyReady) {
+        stateLabel = '已接管';
         stateClass = 'connected';
     } else if (hasBaseUrl && lastSync?.status === 'error') {
         stateLabel = '需要处理';
         stateClass = 'warning';
+    } else if (hasBaseUrl && state.hasCachedConnectionToken) {
+        stateLabel = '待补配置';
+        stateClass = 'waiting';
     } else if (hasBaseUrl) {
-        stateLabel = '准备接入';
+        stateLabel = '等待配置';
         stateClass = 'waiting';
     }
 
@@ -146,7 +167,7 @@ function renderSummary() {
     document.getElementById('summaryEmail').textContent = lastSync?.email || '等待识别';
     document.getElementById('summaryNextCheck').textContent = state.nextScheduledAt
         ? formatDateTime(state.nextScheduledAt)
-        : (hasConnection ? '等待排队' : '等待接入');
+        : (hasConnection ? '等待排队' : '等待配置');
     document.getElementById('summaryPolicy').textContent = hasConnection
         ? describeScheduleReason(state.nextScheduledReason, state.periodicSyncMinutes)
         : `保底 ${formatMinutesLabel(state.periodicSyncMinutes)}`;
@@ -171,33 +192,33 @@ function renderExperience() {
 
 function getUiModel() {
     const hasBaseUrl = Boolean(state.baseUrl || state.suggestedBaseUrl);
-    const hasConnection = Boolean(state.hasConnection);
+    const globallyReady = Boolean(state.baseUrl && state.hasAdminToken);
     const lastSync = state.lastSync;
     const periodicLabel = formatMinutesLabel(state.periodicSyncMinutes);
 
-    if (!hasConnection) {
+    if (!globallyReady) {
         return {
-            title: hasBaseUrl ? '确认后立刻接入' : '先接入 Flow2API',
+            title: hasBaseUrl ? '补上权限就能接管' : '先配置全局控制面',
             text: hasBaseUrl
-                ? '扩展会读取已登录控制台里的设置，然后开始接管这个 Profile 的同步。'
-                : '先告诉扩展你的 Flow2API 控制台在哪，后续同步就不需要你反复操作。',
-            actionLabel: '接入 Flow2API',
-            actionNote: '第一次只做一件事：把这个 Profile 接到你的 Flow2API。'
+                ? '现在还差 Flow2API Admin Token。保存后扩展会直接通过 API 管理连接和自动刷新，不再依赖控制台页。'
+                : '先告诉扩展你的 Flow2API 站点和 Admin Token，后续自动同步就不需要你反复操作。',
+            actionLabel: '保存全局配置',
+            actionNote: '第一次只做一件事：把这个浏览器实例接到你的 Flow2API 控制面。'
         };
     }
 
     if (lastSync?.status === 'error') {
         return {
             title: '这次同步没有完成',
-            text: 'Flow2API 已经接入好了。现在只需要重新检查这个 Profile 的 Google Labs 登录态。',
+            text: '全局控制面已经就绪。现在只需要重新检查当前 store 的 Google Labs 登录态。',
             actionLabel: '再试一次',
-            actionNote: '点一下就会重新检查当前这个 Profile，而不会改动别的 Profile。'
+            actionNote: '点一下只会重新检查当前 store，不会改动别的 store。'
         };
     }
 
     if (lastSync?.status === 'success') {
         return {
-            title: '这个 Profile 已经就绪',
+            title: '当前 store 已经就绪',
             text: `Google Labs 登录态有变化时，扩展会自动同步到 Flow2API；没有明显变化时，后台也会最多每 ${periodicLabel} 保底重刷一次。`,
             actionLabel: '立即重新同步',
             actionNote: '只有在你刚切换 Labs 账号，或者想立刻刷新时，才需要点这一下。'
@@ -216,15 +237,15 @@ function getUiModel() {
     }
 
     return {
-        title: '等你在这个 Profile 登录 Labs',
-        text: 'Flow2API 已经接入。你在这个 Profile 登录 Google Labs 后，扩展会自动完成同步。',
-        actionLabel: '同步这个 Profile',
+        title: '等你在当前 store 登录 Labs',
+        text: '全局控制面已经接入。你在当前 store 登录 Google Labs 后，扩展会自动完成同步。',
+        actionLabel: '同步当前 store',
         actionNote: `如果你刚刚登录完成，点一下就会立刻检查；否则后台也会最多每 ${periodicLabel} 自动重试。`
     };
 }
 
 async function runPrimaryAction() {
-    if (state.hasConnection) {
+    if (state.hasAdminToken) {
         return syncCurrentProfile();
     }
 
@@ -234,17 +255,19 @@ async function runPrimaryAction() {
 async function connectFlow2Api() {
     try {
         const baseUrl = collectBaseUrl();
+        const adminToken = collectAdminToken(true);
         const originPattern = toOriginPattern(baseUrl);
         const cookieStoreId = await getCurrentCookieStoreId();
 
         setBusy(true);
-        showStatus('正在连接 Flow2API...', 'info');
+        showStatus('正在保存 Flow2API 全局配置...', 'info');
 
         await ensureHostPermission(originPattern);
 
         const response = await extensionApi.runtime.sendMessage({
-            action: 'connectBaseUrl',
+            action: 'saveGlobalConfig',
             baseUrl,
+            adminToken,
             cookieStoreId
         });
 
@@ -258,7 +281,7 @@ async function connectFlow2Api() {
             render();
 
             if (response?.needsLogin) {
-                showStatus(response.message || '请先登录 Flow2API 控制台', 'info');
+                showStatus(response.message || '请检查 Flow2API Admin Token 是否有效', 'info');
                 return;
             }
 
@@ -268,7 +291,8 @@ async function connectFlow2Api() {
         state.baseUrl = normalizeBaseUrl(baseUrl);
         state.lastSync = response.lastSync || state.lastSync;
         state.hasConnection = true;
-        state.configSource = 'local';
+        state.hasAdminToken = true;
+        state.configSource = 'global';
         render();
 
         const statusType = response.lastSync?.status === 'error'
@@ -276,7 +300,7 @@ async function connectFlow2Api() {
             : (response.synced === false ? 'info' : 'success');
 
         showStatus(
-            response.message || 'Flow2API 已接入。',
+            response.message || 'Flow2API 全局控制面已保存。',
             statusType
         );
     } catch (error) {
@@ -294,16 +318,17 @@ async function syncCurrentProfile() {
         const cookieStoreId = await getCurrentCookieStoreId();
 
         setBusy(true);
-        showStatus('正在检查当前 Profile 的 Google Labs 登录态...', 'info');
+        showStatus('正在检查当前 store 的 Google Labs 登录态...', 'info');
 
         await ensureHostPermission(originPattern);
 
         let response;
 
-        if (!state.baseUrl || state.baseUrl !== normalizedBaseUrl || !state.hasConnection) {
+        if (!state.baseUrl || state.baseUrl !== normalizedBaseUrl || !state.hasAdminToken) {
             response = await extensionApi.runtime.sendMessage({
-                action: 'connectBaseUrl',
+                action: 'saveGlobalConfig',
                 baseUrl: normalizedBaseUrl,
+                adminToken: collectAdminToken(true),
                 cookieStoreId
             });
         } else {
@@ -320,7 +345,7 @@ async function syncCurrentProfile() {
             }
 
             if (response?.needsLogin) {
-                showStatus(response.message || '请先登录 Flow2API 控制台', 'info');
+                showStatus(response.message || '请检查 Flow2API Admin Token 是否有效', 'info');
                 return;
             }
 
@@ -337,7 +362,7 @@ async function syncCurrentProfile() {
             : (response.synced === false ? 'info' : 'success');
 
         showStatus(
-            response.message || '这个 Profile 已同步。',
+            response.message || '当前 store 已同步。',
             statusType
         );
     } catch (error) {
@@ -370,7 +395,7 @@ async function openConsole() {
 async function refreshStatus() {
     try {
         setBusy(true);
-        showStatus('正在刷新当前 Profile 的状态...', 'info');
+        showStatus('正在刷新当前 store 的状态...', 'info');
 
         const cookieStoreId = await getCurrentCookieStoreId();
         const response = await extensionApi.runtime.sendMessage({
@@ -501,6 +526,19 @@ function collectBaseUrl(allowEmpty = false) {
     return normalizeBaseUrl(raw);
 }
 
+function collectAdminToken(allowKeepExisting = false) {
+    const raw = document.getElementById('adminToken').value.trim();
+    if (raw) {
+        return raw;
+    }
+
+    if (allowKeepExisting && state.hasAdminToken) {
+        return '';
+    }
+
+    throw new Error('请填写 Flow2API Admin Token');
+}
+
 function normalizeBaseUrl(raw) {
     let value = typeof raw === 'string' ? raw.trim() : '';
     if (!value) {
@@ -531,6 +569,7 @@ function toOriginPattern(baseUrl) {
 
 function setBusy(isBusy) {
     document.getElementById('connectBtn').disabled = isBusy;
+    document.getElementById('adminToken').disabled = isBusy;
     document.getElementById('periodicSyncMinutes').disabled = isBusy;
     document.getElementById('refreshStatusBtn').disabled = isBusy;
     document.getElementById('consoleBtn').disabled = isBusy || !hasConsoleTarget();
@@ -606,6 +645,10 @@ function describeScheduleReason(reason, periodicSyncMinutes) {
             return '按账号到期提前刷新';
         case 'heuristic_probe':
             return '按活跃度提前试探';
+        case 'metadata_retry':
+            return '补齐账号过期时间';
+        case 'sync_error':
+            return '同步失败后快速重试';
         case 'waiting_session':
             return '等待登录后短间隔重试';
         case 'periodic':
@@ -622,7 +665,7 @@ function buildSummaryMessage({
     nextScheduledReason
 }) {
     if (!hasConnection) {
-        return '第一次只要确认一次 Flow2API 地址，后续同步会自动完成。';
+        return '先把 Flow2API 站点和 Admin Token 配好，后续自动同步才会真正接管。';
     }
 
     const parts = [];
@@ -632,7 +675,7 @@ function buildSummaryMessage({
     } else if (lastSync?.atExpires) {
         parts.push(`当前账号令牌预计在 ${formatDateTime(lastSync.atExpires)} 前后失效，扩展会提前刷新。`);
     } else {
-        parts.push(`Flow2API 已接入；没有明显变化时，后台也会最多每 ${formatMinutesLabel(periodicSyncMinutes)} 保底重刷一次。`);
+        parts.push(`全局控制面已经接入；没有明显变化时，后台也会最多每 ${formatMinutesLabel(periodicSyncMinutes)} 保底重刷一次。`);
     }
 
     if (nextScheduledAt) {

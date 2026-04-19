@@ -121,7 +121,8 @@
             color: var(--muted);
         }
 
-        input[type="text"] {
+        input[type="text"],
+        input[type="password"] {
             width: 100%;
             border: 1px solid rgba(16, 24, 40, 0.08);
             border-radius: 18px;
@@ -133,7 +134,8 @@
             transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
         }
 
-        input[type="text"]:focus {
+        input[type="text"]:focus,
+        input[type="password"]:focus {
             outline: none;
             border-color: rgba(10, 132, 255, 0.32);
             box-shadow: 0 0 0 5px rgba(10, 132, 255, 0.12);
@@ -370,14 +372,14 @@
                 <div class="eyebrow">Flow2API</div>
                 <div class="chip waiting" id="connectionChip">未接入</div>
             </div>
-            <h1 id="heroTitle">先接入 Flow2API</h1>
+            <h1 id="heroTitle">先配置全局控制面</h1>
             <p class="subtitle" id="heroText">
-                确认一次你的 Flow2API 控制台地址。扩展会接管后续同步，不再让你反复设置。
+                只配置一次 Flow2API 站点和 Admin Token，后续各 store 的 Labs session 会由扩展自动管理。
             </p>
         </div>
 
         <div class="card input-card">
-            <label for="baseUrl">Flow2API 控制台</label>
+            <label for="baseUrl">Flow2API 站点</label>
             <input
                 type="text"
                 id="baseUrl"
@@ -385,7 +387,20 @@
                 autocomplete="off"
                 spellcheck="false">
             <div class="hint">
-                只填站点地址，例如 <code>https://flow2api.example.com</code>。扩展会自动读取已登录控制台里的连接设置。
+                只填站点地址，例如 <code>https://flow2api.example.com</code>。自动同步不再依赖后台打开控制台页面。
+            </div>
+
+            <div class="setting-stack">
+                <label for="adminToken">Flow2API Admin Token</label>
+                <input
+                    type="password"
+                    id="adminToken"
+                    placeholder="输入后只保存，不会回显"
+                    autocomplete="off"
+                    spellcheck="false">
+                <div class="hint" id="adminTokenHint">
+                    填一次即可。后续连接 token 会由扩展自动通过 API 获取和刷新。
+                </div>
             </div>
 
             <div class="setting-stack">
@@ -406,9 +421,9 @@
         <div class="status" id="status"></div>
 
         <div class="actions">
-            <button class="btn-primary" id="connectBtn">接入 Flow2API</button>
+            <button class="btn-primary" id="connectBtn">保存并接管同步</button>
             <div class="action-note" id="actionNote">
-                只做一件事：让这个 Profile 开始为 Flow2API 自动同步。
+                先保存全局控制配置，再由扩展接管当前 store 的同步和后续自动刷新。
             </div>
             <button class="btn-plain" id="refreshStatusBtn">刷新当前状态</button>
             <button class="btn-plain" id="consoleBtn">打开 Flow2API 控制台</button>
@@ -441,11 +456,11 @@
             </div>
 
             <div class="snapshot-note" id="summaryMessage">
-                先把这个 Profile 接到 Flow2API，后面的登录态变化会自动跟上。
+                先把全局控制面配好，后面的 Labs 登录态变化会自动跟上。
             </div>
 
             <div class="browser-hint" id="browserHint">
-                每个 Profile 的 Google 登录态彼此独立。扩展只处理你当前打开的这个 Profile。
+                每个真实浏览器 Profile 仍然彼此隔离；当前扩展实例只会管理这个浏览器 Profile 里的 store 和 Labs session。
             </div>
         </div>
     </div>

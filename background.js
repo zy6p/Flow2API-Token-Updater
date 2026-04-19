@@ -16,6 +16,7 @@ const LEGACY_SYNC_CONFIG_KEYS = [
     'connectionToken'
 ];
 const DEFAULT_STORE_KEY = '__default__';
+const GLOBAL_CONFIG_KEY = 'globalFlow2ApiConfig';
 const CONFIG_BY_STORE_KEY = 'configByStore';
 const LAST_SYNC_BY_STORE_KEY = 'lastSyncByStore';
 const LAST_SYNC_BY_SESSION_KEY = 'lastSyncBySession';
@@ -30,6 +31,8 @@ const DEFAULT_PERIODIC_SYNC_MINUTES = 240;
 const MIN_PERIODIC_SYNC_MINUTES = 60;
 const MAX_PERIODIC_SYNC_MINUTES = 720;
 const WAITING_RETRY_MINUTES = 5;
+const ERROR_RETRY_MINUTES = 15;
+const METADATA_RETRY_MINUTES = 60;
 const ACCESS_TOKEN_EARLY_REFRESH_MS = 10 * 60 * 1000;
 const ACCESS_TOKEN_MINIMUM_REFRESH_MS = 60 * 1000;
 const HEURISTIC_FAST_PROBE_MS = 5 * 60 * 1000;
@@ -124,7 +127,7 @@ if (extensionApi.runtime.onStartup) {
             await syncConfiguredSessions({
                 reason: 'startup',
                 allowLabsWakeup: true,
-                allowConsoleWakeup: true,
+                allowConsoleWakeup: false,
                 notifyOnError: false
             });
         }
@@ -160,7 +163,7 @@ extensionApi.alarms.onAlarm.addListener(async (alarm) => {
     await syncDueConfiguredSessions({
         reason: 'scheduled_check',
         allowLabsWakeup: true,
-        allowConsoleWakeup: true,
+        allowConsoleWakeup: false,
         notifyOnError: true
     });
 });
@@ -180,13 +183,14 @@ async function handleMessage(request = {}, sender = {}) {
                 periodicSyncMinutes: request.periodicSyncMinutes,
                 cookieStoreId
             });
+        case 'saveGlobalConfig':
         case 'connectBaseUrl':
-            return connectBaseUrl(request.baseUrl, cookieStoreId);
+            return connectBaseUrl(request.baseUrl, request.adminToken, cookieStoreId);
         case 'syncNow':
             return syncCurrentSession({
                 reason: 'manual_sync',
                 allowLabsWakeup: true,
-                allowConsoleWakeup: true,
+                allowConsoleWakeup: false,
                 notifyOnError: false,
                 cookieStoreId
             });
@@ -227,26 +231,52 @@ async function getSetupData(cookieStoreId = null, {
 
     const settings = await loadSettings({ cookieStoreId });
     const suggestedBaseUrl = await getSuggestedBaseUrl(settings.baseUrl);
-    const preferredCookieStoreId = settings.consoleContext?.cookieStoreId || normalizeCookieStoreId(cookieStoreId) || settings.sessionContext?.storeId || null;
 
     if (refreshConnection
         && settings.baseUrl
+        && settings.adminToken
+        && await hasOriginPermission(settings.baseUrl)) {
+        try {
+            await ensureConnectionTokenCache(settings.baseUrl, settings.adminToken, {
+                forceRefresh: !settings.connectionToken
+            });
+        } catch (error) {
+            await Logger.info('Flow2API connection refresh skipped', {
+                baseUrl: settings.baseUrl,
+                reason: error.message
+            });
+        }
+    }
+
+    if (settings.baseUrl
+        && settings.adminToken
         && !settings.connectionToken
         && await hasOriginPermission(settings.baseUrl)) {
-        await hydrateConnectionFromConsole(settings.baseUrl, {
-            openIfMissing: false,
-            activateOnNeedsLogin: false,
-            preferredCookieStoreId,
-            configCookieStoreId: cookieStoreId
-        });
+        try {
+            await ensureConnectionTokenCache(settings.baseUrl, settings.adminToken, {
+                forceRefresh: false
+            });
+        } catch (error) {
+            await Logger.info('Flow2API connection cache still unavailable', {
+                baseUrl: settings.baseUrl,
+                reason: error.message
+            });
+        }
     }
 
     const hydratedSettings = await loadSettings({ cookieStoreId });
+    if (!refreshConnection
+        && !settings.connectionToken
+        && hydratedSettings.connectionToken
+        && settings.baseUrl === hydratedSettings.baseUrl
+        && settings.adminToken === hydratedSettings.adminToken) {
+        settings.connectionToken = hydratedSettings.connectionToken;
+    }
+
     const syncPreferences = await loadSyncPreferences();
     const resolvedStoreKey = storeKeyFromCookieStoreId(
         cookieStoreId
         || hydratedSettings.sessionContext?.storeId
-        || hydratedSettings.consoleContext?.cookieStoreId
         || null
     );
     const scheduledScopeByStore = await loadScheduledScopeByStore();
@@ -271,7 +301,9 @@ async function getSetupData(cookieStoreId = null, {
             syncPreferences,
             scheduledScope: scheduledScopeByStore[resolvedStoreKey] || null
         }),
-        hasConnection: Boolean(hydratedSettings.connectionToken),
+        hasConnection: Boolean(hydratedSettings.baseUrl && (hydratedSettings.adminToken || hydratedSettings.connectionToken)),
+        hasAdminToken: Boolean(hydratedSettings.adminToken),
+        hasCachedConnectionToken: Boolean(hydratedSettings.connectionToken),
         browserInfo: await getBrowserInfoSafe(),
         suggestedBaseUrl
     };
@@ -297,36 +329,37 @@ async function updateSyncPreferences({
     };
 }
 
-async function connectBaseUrl(rawBaseUrl, cookieStoreId = null) {
+async function connectBaseUrl(rawBaseUrl, rawAdminToken = '', cookieStoreId = null) {
     const normalized = normalizeBaseUrl(rawBaseUrl);
-    const preferredCookieStoreId = normalizeCookieStoreId(cookieStoreId);
+    const existingGlobalConfig = await loadGlobalConfig();
+    const adminToken = typeof rawAdminToken === 'string' && rawAdminToken.trim()
+        ? rawAdminToken.trim()
+        : (existingGlobalConfig.baseUrl === normalized.origin ? existingGlobalConfig.adminToken : '');
 
-    await saveScopedConfig(preferredCookieStoreId, {
-        baseUrl: normalized.origin
-    });
+    if (!adminToken) {
+        throw new Error('请填写 Flow2API Admin Token');
+    }
 
     const permissionGranted = await hasOriginPermission(normalized.origin);
     if (!permissionGranted) {
         throw new Error('需要先授权访问这个 Flow2API 域名');
     }
 
-    const connection = await hydrateConnectionFromConsole(normalized.origin, {
-        openIfMissing: true,
-        activateOnNeedsLogin: true,
-        preferredCookieStoreId,
-        configCookieStoreId: cookieStoreId
+    await saveGlobalConfig({
+        baseUrl: normalized.origin,
+        adminToken,
+        connectionToken: ''
     });
-
-    if (!connection.success) {
-        return connection;
-    }
+    await ensureConnectionTokenCache(normalized.origin, adminToken, {
+        forceRefresh: true
+    });
 
     const syncResult = await syncCurrentSession({
         reason: 'manual_connect',
         allowLabsWakeup: true,
-        allowConsoleWakeup: true,
+        allowConsoleWakeup: false,
         notifyOnError: false,
-        adminToken: connection.adminToken,
+        adminToken,
         baseUrl: normalized.origin,
         cookieStoreId
     });
@@ -336,6 +369,7 @@ async function connectBaseUrl(rawBaseUrl, cookieStoreId = null) {
             ...syncResult,
             success: true,
             hasConnection: true,
+            hasAdminToken: true,
             synced: true
         };
     }
@@ -343,6 +377,7 @@ async function connectBaseUrl(rawBaseUrl, cookieStoreId = null) {
     return {
         success: true,
         hasConnection: true,
+        hasAdminToken: true,
         synced: false,
         lastSync: syncResult.lastSync || (await loadSettings({ cookieStoreId })).lastSync,
         message: syncResult.lastSync?.status === 'waiting_session'
@@ -491,7 +526,7 @@ async function performSync({
 
     const settings = await loadSettings({ cookieStoreId });
     const effectiveBaseUrl = baseUrl || settings.baseUrl;
-    const preferredConsoleCookieStoreId = settings.consoleContext?.cookieStoreId || normalizeCookieStoreId(cookieStoreId) || settings.sessionContext?.storeId || null;
+    const effectiveAdminToken = adminToken || settings.adminToken || null;
     const preferredSessionContext = settings.sessionContext || buildStoreSessionPreference(cookieStoreId);
 
     if (!effectiveBaseUrl) {
@@ -501,28 +536,38 @@ async function performSync({
         };
     }
 
-    if (!settings.connectionToken) {
-        const hydrated = await hydrateConnectionFromConsole(effectiveBaseUrl, {
-            openIfMissing: allowConsoleWakeup,
-            activateOnNeedsLogin: reason === 'manual_connect',
-            preferredCookieStoreId: preferredConsoleCookieStoreId,
-            configCookieStoreId: cookieStoreId
-        });
-
-        if (!hydrated.success) {
-            return hydrated;
-        }
-
-        adminToken = adminToken || hydrated.adminToken;
-        settings.connectionToken = hydrated.connectionToken;
-    }
-
     if (!await hasOriginPermission(effectiveBaseUrl)) {
         return {
             success: false,
             error: '扩展尚未获得这个 Flow2API 域名的访问权限'
         };
     }
+
+    let connectionToken = settings.connectionToken;
+    if (!connectionToken && effectiveAdminToken) {
+        try {
+            const refreshedConnection = await ensureConnectionTokenCache(effectiveBaseUrl, effectiveAdminToken, {
+                forceRefresh: false
+            });
+            connectionToken = refreshedConnection.connectionToken;
+        } catch (error) {
+            await Logger.info('Flow2API connection cache unavailable before sync', {
+                baseUrl: effectiveBaseUrl,
+                reason: error.message
+            });
+        }
+    }
+
+    if (!connectionToken) {
+        return {
+            success: false,
+            error: effectiveAdminToken
+                ? '无法为当前 Flow2API 站点建立插件连接，请检查 Admin Token 是否有效'
+                : '请先填写 Flow2API Admin Token'
+        };
+    }
+
+    settings.connectionToken = connectionToken;
 
     try {
         await Logger.info('Starting session sync', {
@@ -533,21 +578,9 @@ async function performSync({
 
         let derivedAccount = null;
 
-        if (!adminToken) {
-            const adminSession = await getAdminSessionFromConsole(effectiveBaseUrl, {
-                openIfMissing: allowConsoleWakeup,
-                activateOnNeedsLogin: false,
-                preferredCookieStoreId: preferredConsoleCookieStoreId
-            });
-
-            if (adminSession.success) {
-                adminToken = adminSession.adminToken;
-            }
-        }
-
         const sessionResolution = await resolveSessionCookie({
             baseUrl: effectiveBaseUrl,
-            adminToken,
+            adminToken: effectiveAdminToken,
             loadIfMissing: allowLabsWakeup,
             preferredContext: preferredSessionContext
         });
@@ -562,29 +595,25 @@ async function performSync({
             throw new Error('未找到当前 Profile 的 Google Labs 登录态，请先在这个 Profile 里登录 Labs');
         }
 
-        if (!derivedAccount && !adminToken && shouldPreserveExistingToken(settings.lastSync, reason)) {
+        if (!derivedAccount && !effectiveAdminToken && shouldPreserveExistingToken(settings.lastSync, reason)) {
             throw new Error(PRESERVE_EXISTING_TOKEN_MESSAGE);
         }
 
         const pushResult = await pushSessionTokenWithRecovery({
             baseUrl: effectiveBaseUrl,
-            connectionToken: settings.connectionToken,
-            sessionToken: sessionCookie.value,
-            allowConsoleWakeup,
-            preferredCookieStoreId: preferredConsoleCookieStoreId
+            adminToken: effectiveAdminToken,
+            connectionToken,
+            sessionToken: sessionCookie.value
         });
 
         if (pushResult.connectionToken) {
+            connectionToken = pushResult.connectionToken;
             settings.connectionToken = pushResult.connectionToken;
         }
 
-        if (!adminToken && pushResult.adminToken) {
-            adminToken = pushResult.adminToken;
-        }
-
-        if (!derivedAccount && adminToken) {
+        if (!derivedAccount && effectiveAdminToken) {
             try {
-                derivedAccount = await convertSessionToken(effectiveBaseUrl, adminToken, sessionCookie.value);
+                derivedAccount = await convertSessionToken(effectiveBaseUrl, effectiveAdminToken, sessionCookie.value);
             } catch (error) {
                 await Logger.info('ST metadata lookup skipped', {
                     reason: error.message
@@ -662,8 +691,8 @@ async function performSync({
             cookieStoreId: normalizeCookieStoreId(cookieStoreId) || null
         });
 
-        if (waitingForSession && refreshAlarm) {
-            await refreshSafetyAlarm();
+        if (refreshAlarm) {
+            await refreshSafetyAlarm({ cookieStoreId });
         }
 
         if (waitingForSession && notifyOnError) {
@@ -866,6 +895,45 @@ async function ensurePluginConfig(baseUrl, adminToken) {
         connectionToken: typeof createResponse.data?.connection_token === 'string'
             ? createResponse.data.connection_token.trim()
             : ''
+    };
+}
+
+async function ensureConnectionTokenCache(baseUrl, adminToken, {
+    forceRefresh = false
+} = {}) {
+    const normalizedBaseUrl = normalizeBaseUrl(baseUrl).origin;
+    const normalizedAdminToken = typeof adminToken === 'string' ? adminToken.trim() : '';
+    if (!normalizedAdminToken) {
+        throw new Error('请先填写 Flow2API Admin Token');
+    }
+
+    const existingGlobalConfig = await loadGlobalConfig();
+    if (!forceRefresh
+        && existingGlobalConfig.baseUrl === normalizedBaseUrl
+        && existingGlobalConfig.connectionToken) {
+        return {
+            connectionToken: existingGlobalConfig.connectionToken,
+            reused: true
+        };
+    }
+
+    const pluginConfig = await ensurePluginConfig(normalizedBaseUrl, normalizedAdminToken);
+    if (!pluginConfig.connectionToken) {
+        throw new Error('Flow2API 没有返回可用的插件连接 Token');
+    }
+
+    const now = new Date().toISOString();
+    await saveGlobalConfig({
+        baseUrl: normalizedBaseUrl,
+        adminToken: normalizedAdminToken,
+        connectionToken: pluginConfig.connectionToken,
+        validatedAt: now,
+        connectionTokenRefreshedAt: now
+    });
+
+    return {
+        connectionToken: pluginConfig.connectionToken,
+        reused: false
     };
 }
 
@@ -1206,6 +1274,133 @@ async function closeTabIfNeeded(tabId) {
     }
 }
 
+function resolveAccountRefreshAt({
+    now,
+    accountExpiryMs
+}) {
+    if (!Number.isFinite(accountExpiryMs)) {
+        return null;
+    }
+
+    const desired = accountExpiryMs - ACCESS_TOKEN_EARLY_REFRESH_MS;
+    const minimum = now + ACCESS_TOKEN_MINIMUM_REFRESH_MS;
+    return Math.max(minimum, desired);
+}
+
+function buildSafetyScheduleCandidates({
+    periodicAt,
+    accountRefreshAt = null,
+    heuristicProbeAt = null,
+    metadataRetryAt = null,
+    errorRetryAt = null,
+    waitingRetryAt = null
+}) {
+    const candidates = [];
+
+    if (Number.isFinite(periodicAt)) {
+        candidates.push({
+            reason: 'periodic',
+            when: periodicAt
+        });
+    }
+
+    if (Number.isFinite(accountRefreshAt)) {
+        candidates.push({
+            reason: 'account_expiry',
+            when: accountRefreshAt
+        });
+    }
+
+    if (Number.isFinite(heuristicProbeAt)) {
+        candidates.push({
+            reason: 'heuristic_probe',
+            when: heuristicProbeAt
+        });
+    }
+
+    if (Number.isFinite(metadataRetryAt)) {
+        candidates.push({
+            reason: 'metadata_retry',
+            when: metadataRetryAt
+        });
+    }
+
+    if (Number.isFinite(errorRetryAt)) {
+        candidates.push({
+            reason: 'sync_error',
+            when: errorRetryAt
+        });
+    }
+
+    if (Number.isFinite(waitingRetryAt)) {
+        candidates.push({
+            reason: 'waiting_session',
+            when: waitingRetryAt
+        });
+    }
+
+    return candidates;
+}
+
+function selectEarliestScheduleCandidate(candidates) {
+    return (Array.isArray(candidates) ? candidates : []).reduce((best, candidate) => {
+        if (!Number.isFinite(candidate?.when)) {
+            return best;
+        }
+
+        if (!best || candidate.when < best.when) {
+            return {
+                reason: candidate.reason,
+                when: candidate.when
+            };
+        }
+
+        return best;
+    }, null);
+}
+
+function buildSafetyScheduleScope({
+    cookieStoreId = null,
+    periodicSyncMinutes,
+    periodicAt,
+    accountExpiryMs = null,
+    accountRefreshAt = null,
+    browserCookieExpiryMs = null,
+    heuristicProbeAt = null,
+    metadataRetryAt = null,
+    errorRetryAt = null,
+    waitingRetryAt = null
+}) {
+    const selectedSchedule = selectEarliestScheduleCandidate(
+        buildSafetyScheduleCandidates({
+            periodicAt,
+            accountRefreshAt,
+            heuristicProbeAt,
+            metadataRetryAt,
+            errorRetryAt,
+            waitingRetryAt
+        })
+    );
+    if (!selectedSchedule) {
+        return null;
+    }
+
+    return {
+        storeKey: storeKeyFromCookieStoreId(cookieStoreId),
+        cookieStoreId: normalizeCookieStoreId(cookieStoreId) || null,
+        scheduledAt: selectedSchedule.when,
+        reason: selectedSchedule.reason,
+        periodicSyncMinutes,
+        accountExpiryAt: accountExpiryMs ? new Date(accountExpiryMs).toISOString() : null,
+        browserCookieExpiryAt: browserCookieExpiryMs ? new Date(browserCookieExpiryMs).toISOString() : null,
+        heuristicProbeAt: heuristicProbeAt ? new Date(heuristicProbeAt).toISOString() : null,
+        metadataRetryAt: metadataRetryAt ? new Date(metadataRetryAt).toISOString() : null,
+        errorRetryAt: errorRetryAt ? new Date(errorRetryAt).toISOString() : null,
+        periodicSyncAt: Number.isFinite(periodicAt) ? new Date(periodicAt).toISOString() : null,
+        waitingRetryAt: waitingRetryAt ? new Date(waitingRetryAt).toISOString() : null
+    };
+}
+
 async function refreshSafetyAlarm({
     cookie = null,
     atExpires = null,
@@ -1240,6 +1435,8 @@ async function refreshSafetyAlarm({
             accountExpiryAt: scope.accountExpiryAt,
             browserCookieExpiryAt: scope.browserCookieExpiryAt,
             heuristicProbeAt: scope.heuristicProbeAt,
+            metadataRetryAt: scope.metadataRetryAt,
+            errorRetryAt: scope.errorRetryAt,
             periodicSyncAt: scope.periodicSyncAt,
             waitingRetryAt: scope.waitingRetryAt
         }))
@@ -1299,61 +1496,41 @@ async function buildSafetySchedule({
             : null;
         const accountExpiryMs = parseDateSafe(effectiveAtExpires || scopedSettings.lastSync?.atExpires);
         if (accountExpiryMs) {
-            const desired = accountExpiryMs - ACCESS_TOKEN_EARLY_REFRESH_MS;
-            const minimum = now + ACCESS_TOKEN_MINIMUM_REFRESH_MS;
-            accountRefreshAt = Math.max(minimum, desired);
+            accountRefreshAt = resolveAccountRefreshAt({
+                now,
+                accountExpiryMs
+            });
         }
 
         const heuristicProbeAt = calculateHeuristicProbeAt({
             now,
             accountExpiryMs
         });
+        const metadataRetryAt = !accountExpiryMs && scopedSettings.lastSync?.status === 'success'
+            ? now + METADATA_RETRY_MINUTES * 60 * 1000
+            : null;
+        const errorRetryAt = scopedSettings.lastSync?.status === 'error'
+            ? now + ERROR_RETRY_MINUTES * 60 * 1000
+            : null;
         const waitingRetryAt = scopedSettings.lastSync?.status === 'waiting_session'
             ? now + WAITING_RETRY_MINUTES * 60 * 1000
             : null;
-
-        const scheduleCandidates = [{
-            reason: 'periodic',
-            when: periodicAt
-        }];
-        if (accountRefreshAt) {
-            scheduleCandidates.push({
-                reason: 'account_expiry',
-                when: accountRefreshAt
-            });
-        }
-        if (heuristicProbeAt) {
-            scheduleCandidates.push({
-                reason: 'heuristic_probe',
-                when: heuristicProbeAt
-            });
-        }
-        if (waitingRetryAt) {
-            scheduleCandidates.push({
-                reason: 'waiting_session',
-                when: waitingRetryAt
-            });
-        }
-        const selectedSchedule = scheduleCandidates.reduce((best, candidate) => {
-            if (!best || candidate.when < best.when) {
-                return candidate;
-            }
-
-            return best;
-        }, null);
-
-        scopes.push({
-            storeKey: storeKeyFromCookieStoreId(currentCookieStoreId),
-            cookieStoreId: normalizeCookieStoreId(currentCookieStoreId) || null,
-            scheduledAt: selectedSchedule?.when || periodicAt,
-            reason: selectedSchedule?.reason || 'periodic',
+        const scope = buildSafetyScheduleScope({
+            cookieStoreId: currentCookieStoreId,
             periodicSyncMinutes,
-            accountExpiryAt: accountExpiryMs ? new Date(accountExpiryMs).toISOString() : null,
-            browserCookieExpiryAt: browserCookieExpiryMs ? new Date(browserCookieExpiryMs).toISOString() : null,
-            heuristicProbeAt: heuristicProbeAt ? new Date(heuristicProbeAt).toISOString() : null,
-            periodicSyncAt: new Date(periodicAt).toISOString(),
-            waitingRetryAt: waitingRetryAt ? new Date(waitingRetryAt).toISOString() : null
+            periodicAt,
+            accountExpiryMs,
+            accountRefreshAt,
+            browserCookieExpiryMs,
+            heuristicProbeAt,
+            metadataRetryAt,
+            errorRetryAt,
+            waitingRetryAt
         });
+
+        if (scope) {
+            scopes.push(scope);
+        }
     }
 
     return {
@@ -1377,14 +1554,14 @@ async function handleLabsSessionRemoved(changeInfo, cookieStoreId = null) {
     }
 
     const settings = await loadSettings({ cookieStoreId });
-    if (!settings.connectionToken) {
+    if (!settings.baseUrl || (!settings.adminToken && !settings.connectionToken)) {
         return;
     }
 
     const recovery = await syncCurrentSession({
         reason: 'cookie_removed_recovery',
         allowLabsWakeup: true,
-        allowConsoleWakeup: true,
+        allowConsoleWakeup: false,
         notifyOnError: false,
         cookieStoreId
     });
@@ -1975,24 +2152,182 @@ async function hasOriginPermission(origin) {
     }
 }
 
-async function loadSettings({ cookieStoreId = null } = {}) {
-    const scopedState = await loadStoreScopedState();
-    const storeKey = storeKeyFromCookieStoreId(cookieStoreId);
-    const scopedConfig = scopedState.configByStore[storeKey] || null;
-    const sharedConfig = scopedConfig
-        ? null
-        : resolveSharedConfigCandidate(scopedState.configByStore);
-    const effectiveConfig = scopedConfig || sharedConfig || null;
+function normalizeGlobalConfig(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return null;
+    }
+
+    let baseUrl = '';
+    if (typeof value.baseUrl === 'string' && value.baseUrl.trim()) {
+        try {
+            baseUrl = normalizeBaseUrl(value.baseUrl).origin;
+        } catch (error) {
+            baseUrl = '';
+        }
+    }
+
+    const adminToken = typeof value.adminToken === 'string'
+        ? value.adminToken.trim()
+        : '';
+    const connectionToken = typeof value.connectionToken === 'string'
+        ? value.connectionToken.trim()
+        : '';
+    const validatedAt = normalizeOptionalIsoString(value.validatedAt);
+    const connectionTokenRefreshedAt = normalizeOptionalIsoString(
+        value.connectionTokenRefreshedAt || value.connectionTokenCache?.refreshedAt
+    );
+
+    if (!baseUrl && !adminToken && !connectionToken) {
+        return null;
+    }
 
     return {
-        baseUrl: effectiveConfig?.baseUrl || '',
-        connectionToken: effectiveConfig?.connectionToken || '',
+        baseUrl,
+        adminToken,
+        connectionToken,
+        validatedAt,
+        connectionTokenRefreshedAt
+    };
+}
+
+function emptyGlobalConfig() {
+    return {
+        baseUrl: '',
+        adminToken: '',
+        connectionToken: '',
+        validatedAt: null,
+        connectionTokenRefreshedAt: null
+    };
+}
+
+async function loadGlobalConfig() {
+    const stored = await extensionApi.storage.local.get([
+        GLOBAL_CONFIG_KEY,
+        'baseUrl',
+        'connectionToken',
+        'apiUrl'
+    ]);
+    const explicit = normalizeGlobalConfig(stored[GLOBAL_CONFIG_KEY]);
+    if (explicit) {
+        return explicit;
+    }
+
+    const scopedState = await loadStoreScopedState();
+    const sharedConfig = resolveSharedConfigCandidate(scopedState.configByStore);
+    if (sharedConfig) {
+        const migrated = normalizeGlobalConfig({
+            baseUrl: sharedConfig.baseUrl,
+            connectionToken: sharedConfig.connectionToken
+        });
+        if (migrated) {
+            await extensionApi.storage.local.set({
+                [GLOBAL_CONFIG_KEY]: migrated
+            });
+            return migrated;
+        }
+    }
+
+    let legacyBaseUrl = typeof stored.baseUrl === 'string' ? stored.baseUrl.trim() : '';
+    let legacyApiUrl = typeof stored.apiUrl === 'string' ? stored.apiUrl.trim() : '';
+    let legacyConnectionToken = typeof stored.connectionToken === 'string'
+        ? stored.connectionToken.trim()
+        : '';
+
+    if (legacyBaseUrl) {
+        try {
+            legacyBaseUrl = normalizeBaseUrl(legacyBaseUrl).origin;
+        } catch (error) {
+            legacyBaseUrl = '';
+        }
+    }
+
+    if (!legacyBaseUrl && legacyApiUrl) {
+        try {
+            legacyBaseUrl = normalizeBaseUrl(legacyApiUrl).origin;
+        } catch (error) {
+            legacyBaseUrl = '';
+        }
+    }
+
+    const migrated = normalizeGlobalConfig({
+        baseUrl: legacyBaseUrl,
+        connectionToken: legacyConnectionToken
+    });
+    if (migrated) {
+        await extensionApi.storage.local.set({
+            [GLOBAL_CONFIG_KEY]: migrated
+        });
+        return migrated;
+    }
+
+    return emptyGlobalConfig();
+}
+
+async function saveGlobalConfig({
+    baseUrl = UNSET_VALUE,
+    adminToken = UNSET_VALUE,
+    connectionToken = UNSET_VALUE,
+    validatedAt = UNSET_VALUE,
+    connectionTokenRefreshedAt = UNSET_VALUE
+} = {}) {
+    const existing = await loadGlobalConfig();
+    const nextConfig = {
+        ...existing
+    };
+
+    if (baseUrl !== UNSET_VALUE) {
+        nextConfig.baseUrl = typeof baseUrl === 'string' && baseUrl.trim()
+            ? normalizeBaseUrl(baseUrl).origin
+            : '';
+    }
+
+    if (adminToken !== UNSET_VALUE) {
+        nextConfig.adminToken = typeof adminToken === 'string'
+            ? adminToken.trim()
+            : '';
+    }
+
+    if (connectionToken !== UNSET_VALUE) {
+        nextConfig.connectionToken = typeof connectionToken === 'string'
+            ? connectionToken.trim()
+            : '';
+    }
+
+    if (validatedAt !== UNSET_VALUE) {
+        nextConfig.validatedAt = normalizeOptionalIsoString(validatedAt);
+    }
+
+    if (connectionTokenRefreshedAt !== UNSET_VALUE) {
+        nextConfig.connectionTokenRefreshedAt = normalizeOptionalIsoString(connectionTokenRefreshedAt);
+    }
+
+    const normalized = normalizeGlobalConfig(nextConfig);
+    if (normalized) {
+        await extensionApi.storage.local.set({
+            [GLOBAL_CONFIG_KEY]: normalized
+        });
+        return normalized;
+    }
+
+    await extensionApi.storage.local.remove([GLOBAL_CONFIG_KEY]);
+    return emptyGlobalConfig();
+}
+
+async function loadSettings({ cookieStoreId = null } = {}) {
+    const scopedState = await loadStoreScopedState();
+    const globalConfig = await loadGlobalConfig();
+    const storeKey = storeKeyFromCookieStoreId(cookieStoreId);
+
+    return {
+        baseUrl: globalConfig.baseUrl || '',
+        adminToken: globalConfig.adminToken || '',
+        connectionToken: globalConfig.connectionToken || '',
         lastSync: scopedState.lastSyncByStore[storeKey] || null,
         sessionContext: scopedState.sessionContextByStore[storeKey] || null,
         consoleContext: scopedState.consoleContextByStore[storeKey] || null,
-        configSource: scopedConfig
-            ? 'local'
-            : (sharedConfig ? 'shared' : 'none')
+        configSource: globalConfig.baseUrl ? 'global' : 'none',
+        hasAdminToken: Boolean(globalConfig.adminToken),
+        hasCachedConnectionToken: Boolean(globalConfig.connectionToken)
     };
 }
 
@@ -2162,30 +2497,20 @@ async function detectCurrentSessionState({
     }
 
     let derivedAccount = null;
-    if (allowSessionMetadataLookup && effectiveSettings.baseUrl && await hasOriginPermission(effectiveSettings.baseUrl)) {
-        const preferredCookieStoreId = effectiveSettings.consoleContext?.cookieStoreId
-            || normalizeCookieStoreId(cookieStoreId)
-            || effectiveSettings.sessionContext?.storeId
-            || normalizeCookieStoreId(sessionCookie.storeId)
-            || null;
-        const adminSession = await getAdminSessionFromConsole(effectiveSettings.baseUrl, {
-            openIfMissing: false,
-            activateOnNeedsLogin: false,
-            preferredCookieStoreId
-        });
-
-        if (adminSession.success) {
-            try {
-                derivedAccount = await convertSessionToken(
-                    effectiveSettings.baseUrl,
-                    adminSession.adminToken,
-                    sessionCookie.value
-                );
-            } catch (error) {
-                await Logger.info('Current session preview skipped', {
-                    reason: error.message
-                });
-            }
+    if (allowSessionMetadataLookup
+        && effectiveSettings.baseUrl
+        && effectiveSettings.adminToken
+        && await hasOriginPermission(effectiveSettings.baseUrl)) {
+        try {
+            derivedAccount = await convertSessionToken(
+                effectiveSettings.baseUrl,
+                effectiveSettings.adminToken,
+                sessionCookie.value
+            );
+        } catch (error) {
+            await Logger.info('Current session preview skipped', {
+                reason: error.message
+            });
         }
     }
 
@@ -2246,6 +2571,8 @@ async function saveScheduledAtByStore(scopes) {
             accountExpiryAt: scope.accountExpiryAt,
             browserCookieExpiryAt: scope.browserCookieExpiryAt,
             heuristicProbeAt: scope.heuristicProbeAt,
+            metadataRetryAt: scope.metadataRetryAt,
+            errorRetryAt: scope.errorRetryAt,
             periodicSyncAt: scope.periodicSyncAt,
             waitingRetryAt: scope.waitingRetryAt
         });
@@ -2342,6 +2669,8 @@ function normalizeScheduledScope(value) {
         accountExpiryAt: normalizeOptionalIsoString(value.accountExpiryAt),
         browserCookieExpiryAt: normalizeOptionalIsoString(value.browserCookieExpiryAt),
         heuristicProbeAt: normalizeOptionalIsoString(value.heuristicProbeAt),
+        metadataRetryAt: normalizeOptionalIsoString(value.metadataRetryAt),
+        errorRetryAt: normalizeOptionalIsoString(value.errorRetryAt),
         periodicSyncAt: normalizeOptionalIsoString(value.periodicSyncAt),
         waitingRetryAt: normalizeOptionalIsoString(value.waitingRetryAt)
     };
@@ -2357,6 +2686,8 @@ function normalizeScheduleReason(value) {
         case 'periodic':
         case 'account_expiry':
         case 'heuristic_probe':
+        case 'metadata_retry':
+        case 'sync_error':
         case 'waiting_session':
             return value;
         default:
@@ -2521,15 +2852,11 @@ async function saveScopedSettings(cookieStoreId, {
 }
 
 async function collectConfiguredCookieStoreIds() {
+    const globalConfig = await loadGlobalConfig();
     const scopedState = await loadStoreScopedState();
-    const storeKeys = new Set(
-        Object.entries(scopedState.configByStore)
-            .filter(([, config]) => Boolean(config?.baseUrl))
-            .map(([storeKey]) => storeKey)
-    );
-    const sharedConfig = resolveSharedConfigCandidate(scopedState.configByStore);
+    const storeKeys = new Set();
 
-    if (sharedConfig?.baseUrl) {
+    if (globalConfig.baseUrl) {
         for (const storeKey of Object.keys(scopedState.lastSyncByStore)) {
             storeKeys.add(storeKey);
         }
@@ -2541,6 +2868,20 @@ async function collectConfiguredCookieStoreIds() {
         for (const storeKey of Object.keys(scopedState.consoleContextByStore)) {
             storeKeys.add(storeKey);
         }
+
+        for (const cookieStoreId of await collectCandidateCookieStoreIds()) {
+            storeKeys.add(storeKeyFromCookieStoreId(cookieStoreId));
+        }
+
+        if (storeKeys.size === 0) {
+            storeKeys.add(DEFAULT_STORE_KEY);
+        }
+    } else {
+        for (const [storeKey, config] of Object.entries(scopedState.configByStore)) {
+            if (config?.baseUrl) {
+                storeKeys.add(storeKey);
+            }
+        }
     }
 
     return [...storeKeys].map(cookieStoreIdFromStoreKey);
@@ -2549,9 +2890,11 @@ async function collectConfiguredCookieStoreIds() {
 async function hasKnownStoreState(cookieStoreId, scopedState = null) {
     const effectiveScopedState = scopedState || await loadStoreScopedState();
     const storeKey = storeKeyFromCookieStoreId(cookieStoreId);
+    const globalConfig = await loadGlobalConfig();
 
     return Boolean(
-        effectiveScopedState.configByStore[storeKey]?.baseUrl
+        globalConfig.baseUrl
+        || effectiveScopedState.configByStore[storeKey]?.baseUrl
         || effectiveScopedState.lastSyncByStore[storeKey]
         || effectiveScopedState.sessionContextByStore[storeKey]
         || effectiveScopedState.consoleContextByStore[storeKey]
@@ -2725,42 +3068,39 @@ function createHttpError(result, fallbackMessage) {
 
 async function pushSessionTokenWithRecovery({
     baseUrl,
+    adminToken = null,
     connectionToken,
-    sessionToken,
-    allowConsoleWakeup,
-    preferredCookieStoreId = null
+    sessionToken
 }) {
     try {
         return {
             payload: await pushSessionToken(baseUrl, connectionToken, sessionToken),
-            connectionToken,
-            adminToken: null
+            connectionToken
         };
     } catch (error) {
-        if (!allowConsoleWakeup || !shouldRetryConnectionHydration(error)) {
+        if (!adminToken) {
             throw error;
         }
 
-        await Logger.info('Flow2API connection token rejected, retrying console hydration', {
+        if (!shouldRetryConnectionHydration(error)) {
+            throw error;
+        }
+
+        await Logger.info('Flow2API connection token rejected, retrying admin-token refresh', {
             baseUrl,
             status: error.httpStatus || null
         });
 
-        const recovered = await hydrateConnectionFromConsole(baseUrl, {
-            openIfMissing: true,
-            activateOnNeedsLogin: false,
-            preferredCookieStoreId,
-            configCookieStoreId: preferredCookieStoreId
+        const recovered = await ensureConnectionTokenCache(baseUrl, adminToken, {
+            forceRefresh: true
         });
-
-        if (!recovered.success || !recovered.connectionToken) {
+        if (!recovered.connectionToken) {
             throw error;
         }
 
         return {
             payload: await pushSessionToken(baseUrl, recovered.connectionToken, sessionToken),
-            connectionToken: recovered.connectionToken,
-            adminToken: recovered.adminToken || null
+            connectionToken: recovered.connectionToken
         };
     }
 }
@@ -2972,7 +3312,7 @@ async function handleTrackedSessionCookieChange(changeInfo) {
     await syncCurrentSession({
         reason: 'cookie_changed',
         allowLabsWakeup: false,
-        allowConsoleWakeup: true,
+        allowConsoleWakeup: false,
         notifyOnError: true,
         cookieStoreId
     });

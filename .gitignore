@@ -3,3 +3,4 @@ dist/
 .wrangler/
 web-ext-artifacts/
 .firefox-developers-token.txt
+node_modules/
