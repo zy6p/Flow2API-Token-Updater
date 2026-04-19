@@ -11,7 +11,9 @@ const state = {
     configSource: 'none',
     periodicSyncMinutes: 240,
     nextScheduledAt: null,
-    nextScheduledReason: null
+    nextScheduledReason: null,
+    storePolicy: 'observe',
+    explicitStorePolicy: null
 };
 
 let statusTimer = null;
@@ -24,6 +26,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 function bindEvents() {
     document.getElementById('connectBtn').addEventListener('click', runPrimaryAction);
     document.getElementById('periodicSyncMinutes').addEventListener('change', updateSyncPreferences);
+    document.getElementById('storePolicy').addEventListener('change', updateStorePolicy);
     document.getElementById('refreshStatusBtn').addEventListener('click', refreshStatus);
     document.getElementById('consoleBtn').addEventListener('click', openConsole);
     document.getElementById('logsBtn').addEventListener('click', openLogs);
@@ -67,10 +70,16 @@ function applySetupResponse(response) {
     state.periodicSyncMinutes = normalizePeriodicSyncMinutes(response.settings?.periodicSyncMinutes);
     state.nextScheduledAt = response.settings?.nextScheduledAt || null;
     state.nextScheduledReason = response.settings?.nextScheduledReason || null;
+    state.storePolicy = normalizeStorePolicy(response.settings?.storePolicy);
+    state.explicitStorePolicy = normalizeStorePolicy(response.settings?.explicitStorePolicy, true);
 }
 
 function showStatusForCurrentState() {
-    if (state.lastSync?.status === 'success') {
+    if (state.storePolicy === 'disabled') {
+        showStatus('当前 store 已停用自动管理。需要时仍然可以手动同步。', 'info');
+    } else if (state.storePolicy === 'observe' && state.hasConnection) {
+        showStatus('当前 store 只做轻量跟随，不会主动开后台唤醒页。', 'info');
+    } else if (state.lastSync?.status === 'success') {
         showStatus('当前 store 已经由全局配置接管。', 'success');
     } else if (state.lastSync?.status === 'detected_session') {
         showStatus(state.lastSync.message || '检测到当前账号，点一下就可以同步这个账号。', 'info');
@@ -121,6 +130,14 @@ function renderPreferences() {
 
     document.getElementById('intervalHint').textContent =
         `没检测到明显变化时，扩展仍会最多每 ${formatMinutesLabel(state.periodicSyncMinutes)} 自动重刷一次。`;
+
+    const storePolicySelect = document.getElementById('storePolicy');
+    const normalizedStorePolicy = normalizeStorePolicy(state.storePolicy);
+    if (storePolicySelect.value !== normalizedStorePolicy) {
+        storePolicySelect.value = normalizedStorePolicy;
+    }
+
+    document.getElementById('storePolicyHint').textContent = describeStorePolicyHint(normalizedStorePolicy);
 }
 
 function renderSummary() {
@@ -167,14 +184,13 @@ function renderSummary() {
     document.getElementById('summaryEmail').textContent = lastSync?.email || '等待识别';
     document.getElementById('summaryNextCheck').textContent = state.nextScheduledAt
         ? formatDateTime(state.nextScheduledAt)
-        : (hasConnection ? '等待排队' : '等待配置');
-    document.getElementById('summaryPolicy').textContent = hasConnection
-        ? describeScheduleReason(state.nextScheduledReason, state.periodicSyncMinutes)
-        : `保底 ${formatMinutesLabel(state.periodicSyncMinutes)}`;
+        : describeNextCheckState(hasConnection);
+    document.getElementById('summaryPolicy').textContent = describeSummaryPolicy();
     document.getElementById('summaryLastSync').textContent = formatDateTime(lastSync?.syncedAt);
     document.getElementById('summaryMessage').textContent = buildSummaryMessage({
         hasConnection,
         lastSync,
+        storePolicy: state.storePolicy,
         periodicSyncMinutes: state.periodicSyncMinutes,
         nextScheduledAt: state.nextScheduledAt,
         nextScheduledReason: state.nextScheduledReason
@@ -195,6 +211,7 @@ function getUiModel() {
     const globallyReady = Boolean(state.baseUrl && state.hasAdminToken);
     const lastSync = state.lastSync;
     const periodicLabel = formatMinutesLabel(state.periodicSyncMinutes);
+    const storeMode = normalizeStorePolicy(state.storePolicy);
 
     if (!globallyReady) {
         return {
@@ -204,6 +221,24 @@ function getUiModel() {
                 : '先告诉扩展你的 Flow2API 站点和 Admin Token，后续自动同步就不需要你反复操作。',
             actionLabel: '保存全局配置',
             actionNote: '第一次只做一件事：把这个浏览器实例接到你的 Flow2API 控制面。'
+        };
+    }
+
+    if (storeMode === 'disabled') {
+        return {
+            title: '当前 store 已停用自动管理',
+            text: '这个 store 不会再被后台主动检查，也不会因为 Labs Cookie 变化自动同步。需要时你仍然可以手动同步一次。',
+            actionLabel: '手动同步一次',
+            actionNote: '如果你不想再看到后台唤醒干扰，就把不重要的 store 设成停用。'
+        };
+    }
+
+    if (storeMode === 'observe') {
+        return {
+            title: '当前 store 只做轻量跟随',
+            text: '这个 store 会在你自己登录、切换账号或 Cookie 变化时顺手同步，但不会主动开后台唤醒页。',
+            actionLabel: '手动同步当前 store',
+            actionNote: '适合偶尔才会登录的 store。真正需要零干预的，再切成主动管理。'
         };
     }
 
@@ -449,6 +484,35 @@ async function updateSyncPreferences(event) {
     }
 }
 
+async function updateStorePolicy(event) {
+    const requestedPolicy = normalizeStorePolicy(event.target.value);
+
+    try {
+        setBusy(true);
+        showStatus(`正在把当前 store 改成“${describeStorePolicyLabel(requestedPolicy)}”...`, 'info');
+
+        const cookieStoreId = await getCurrentCookieStoreId();
+        const response = await extensionApi.runtime.sendMessage({
+            action: 'updateStorePolicy',
+            cookieStoreId,
+            storePolicy: requestedPolicy
+        });
+
+        if (!response?.success) {
+            throw new Error(response?.error || '更新当前 store 管理模式失败');
+        }
+
+        applySetupResponse(response);
+        render(true);
+        showStatus(`当前 store 已改成“${describeStorePolicyLabel(state.storePolicy)}”。`, 'success');
+    } catch (error) {
+        renderPreferences();
+        showStatus(error.message || '更新当前 store 管理模式失败', 'error');
+    } finally {
+        setBusy(false);
+    }
+}
+
 async function openLogs() {
     const logsUrl = extensionApi.runtime?.getURL
         ? extensionApi.runtime.getURL('logs.html')
@@ -571,6 +635,7 @@ function setBusy(isBusy) {
     document.getElementById('connectBtn').disabled = isBusy;
     document.getElementById('adminToken').disabled = isBusy;
     document.getElementById('periodicSyncMinutes').disabled = isBusy;
+    document.getElementById('storePolicy').disabled = isBusy;
     document.getElementById('refreshStatusBtn').disabled = isBusy;
     document.getElementById('consoleBtn').disabled = isBusy || !hasConsoleTarget();
     document.getElementById('logsBtn').disabled = isBusy;
@@ -639,6 +704,17 @@ function normalizePeriodicSyncMinutes(value) {
     return Math.min(720, Math.max(60, Math.round(value)));
 }
 
+function normalizeStorePolicy(value, allowNull = false) {
+    switch (value) {
+        case 'auto':
+        case 'observe':
+        case 'disabled':
+            return value;
+        default:
+            return allowNull ? null : 'observe';
+    }
+}
+
 function describeScheduleReason(reason, periodicSyncMinutes) {
     switch (reason) {
         case 'account_expiry':
@@ -657,15 +733,77 @@ function describeScheduleReason(reason, periodicSyncMinutes) {
     }
 }
 
+function describeStorePolicyLabel(policy) {
+    switch (normalizeStorePolicy(policy)) {
+        case 'auto':
+            return '主动管理';
+        case 'disabled':
+            return '停用';
+        case 'observe':
+        default:
+            return '轻量跟随';
+    }
+}
+
+function describeStorePolicyHint(policy) {
+    switch (normalizeStorePolicy(policy)) {
+        case 'auto':
+            return '主动管理：这个 store 会参与定时检查，也允许后台唤醒 Labs 页来自动恢复会话。';
+        case 'disabled':
+            return '停用：这个 store 完全不参与后台自动检查，也不会跟随 Cookie 变化自动同步。';
+        case 'observe':
+        default:
+            return '轻量跟随：只在你自己登录、切换账号或 Cookie 变化时顺手同步，不主动开后台唤醒页。';
+    }
+}
+
+function describeNextCheckState(hasConnection) {
+    if (!hasConnection) {
+        return '等待配置';
+    }
+
+    if (state.storePolicy === 'disabled') {
+        return '已停用';
+    }
+
+    if (state.storePolicy === 'observe') {
+        return '按活动跟随';
+    }
+
+    return '等待排队';
+}
+
+function describeSummaryPolicy() {
+    const modeLabel = describeStorePolicyLabel(state.storePolicy);
+    if (!state.hasConnection) {
+        return modeLabel;
+    }
+
+    if (state.storePolicy !== 'auto') {
+        return modeLabel;
+    }
+
+    return `${modeLabel} · ${describeScheduleReason(state.nextScheduledReason, state.periodicSyncMinutes)}`;
+}
+
 function buildSummaryMessage({
     hasConnection,
     lastSync,
+    storePolicy,
     periodicSyncMinutes,
     nextScheduledAt,
     nextScheduledReason
 }) {
     if (!hasConnection) {
         return '先把 Flow2API 站点和 Admin Token 配好，后续自动同步才会真正接管。';
+    }
+
+    if (storePolicy === 'disabled') {
+        return '当前 store 已停用自动管理。它不会再被后台主动打扰；需要时再手动同步一次即可。';
+    }
+
+    if (storePolicy === 'observe') {
+        return '当前 store 处于轻量跟随模式。只有你自己登录、切换账号或 Cookie 变化时，扩展才会顺手同步，不会主动开后台唤醒页。';
     }
 
     const parts = [];

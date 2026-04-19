@@ -13,14 +13,16 @@ const {
 function buildGlobalConfig({
     baseUrl = FLOW2API_ORIGIN,
     adminToken = 'admin-token',
-    connectionToken = 'connection-token'
+    connectionToken = 'connection-token',
+    storePolicyByStore = {}
 } = {}) {
     return {
         globalFlow2ApiConfig: {
             baseUrl,
             adminToken,
             connectionToken
-        }
+        },
+        storePolicyByStore
     };
 }
 
@@ -187,7 +189,10 @@ async function testConnectionTokenRecoveryUsesAdminTokenInsteadOfConsole() {
     const background = loadBackground(harness);
 
     await harness.localStorageArea.set(buildGlobalConfig({
-        connectionToken: 'stale-connection-token'
+        connectionToken: 'stale-connection-token',
+        storePolicyByStore: {
+            __default__: 'auto'
+        }
     }));
 
     const result = await background.syncCurrentSession({
@@ -231,6 +236,11 @@ async function testGenericSyncErrorSchedulesQuickRetry() {
     const background = loadBackground(harness);
 
     await harness.localStorageArea.set(buildGlobalConfig());
+    await harness.localStorageArea.set({
+        storePolicyByStore: {
+            __default__: 'auto'
+        }
+    });
 
     const result = await background.syncCurrentSession({
         reason: 'scheduled_check',
@@ -265,7 +275,10 @@ async function testMetadataUnknownSchedulesHourlyProbe() {
 
     await harness.localStorageArea.set(buildGlobalConfig({
         adminToken: '',
-        connectionToken: 'connection-token'
+        connectionToken: 'connection-token',
+        storePolicyByStore: {
+            __default__: 'auto'
+        }
     }));
 
     const result = await background.syncCurrentSession({
@@ -284,6 +297,42 @@ async function testMetadataUnknownSchedulesHourlyProbe() {
         '2026-01-01T01:00:00.000Z',
         'missing expiry metadata should now trigger an earlier follow-up probe'
     );
+}
+
+async function testObserveStoreDoesNotJoinAutomaticScheduling() {
+    const harness = createHarness({
+        cookies: [{
+            name: SESSION_COOKIE_NAME,
+            value: 'observe-session',
+            domain: 'labs.google',
+            path: '/',
+            storeId: 'firefox-container-9',
+            firstPartyDomain: null,
+            expirationDate: 1796054400
+        }]
+    });
+    const background = loadBackground(harness);
+
+    await harness.localStorageArea.set({
+        ...buildGlobalConfig(),
+        storePolicyByStore: {
+            'firefox-container-9': 'observe'
+        }
+    });
+
+    const result = await background.syncCurrentSession({
+        reason: 'manual_sync',
+        allowLabsWakeup: false,
+        allowConsoleWakeup: false,
+        notifyOnError: false,
+        cookieStoreId: 'firefox-container-9'
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.lastSync.status, 'success');
+
+    await background.refreshSafetyAlarm();
+    assert.equal(harness.alarms.length, 0, 'observe stores should not create proactive alarms');
 }
 
 async function testScheduledAlarmOnlyRunsDueStore() {
@@ -313,6 +362,10 @@ async function testScheduledAlarmOnlyRunsDueStore() {
 
     await harness.localStorageArea.set({
         ...buildGlobalConfig(),
+        storePolicyByStore: {
+            'firefox-container-1': 'auto',
+            'firefox-container-2': 'auto'
+        },
         lastSyncByStore: {
             'firefox-container-1': {
                 status: 'waiting_session',
@@ -335,6 +388,14 @@ async function testScheduledAlarmOnlyRunsDueStore() {
                 sessionFingerprint: background.fingerprintSessionToken('healthy-store-session'),
                 action: 'updated',
                 message: '同步成功'
+            }
+        },
+        sessionContextByStore: {
+            'firefox-container-2': {
+                storeId: 'firefox-container-2',
+                domain: 'labs.google',
+                path: '/',
+                name: SESSION_COOKIE_NAME
             }
         }
     });
@@ -359,6 +420,7 @@ async function main() {
         testConnectionTokenRecoveryUsesAdminTokenInsteadOfConsole,
         testGenericSyncErrorSchedulesQuickRetry,
         testMetadataUnknownSchedulesHourlyProbe,
+        testObserveStoreDoesNotJoinAutomaticScheduling,
         testScheduledAlarmOnlyRunsDueStore
     ];
 

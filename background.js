@@ -22,6 +22,8 @@ const LAST_SYNC_BY_STORE_KEY = 'lastSyncByStore';
 const LAST_SYNC_BY_SESSION_KEY = 'lastSyncBySession';
 const SESSION_CONTEXT_BY_STORE_KEY = 'sessionContextByStore';
 const CONSOLE_CONTEXT_BY_STORE_KEY = 'consoleContextByStore';
+const STORE_POLICY_BY_STORE_KEY = 'storePolicyByStore';
+const RETRY_STATE_BY_STORE_KEY = 'retryStateByStore';
 const SYNC_PREFERENCES_KEY = 'syncPreferences';
 const NEXT_SCHEDULED_AT_BY_STORE_KEY = 'nextScheduledAtByStore';
 const SCHEDULE_SCOPE_BY_STORE_KEY = 'scheduleScopeByStore';
@@ -30,9 +32,15 @@ const SYNC_ALARM_NAME = 'flow2apiSafetySync';
 const DEFAULT_PERIODIC_SYNC_MINUTES = 240;
 const MIN_PERIODIC_SYNC_MINUTES = 60;
 const MAX_PERIODIC_SYNC_MINUTES = 720;
+const STORE_POLICY_AUTO = 'auto';
+const STORE_POLICY_OBSERVE = 'observe';
+const STORE_POLICY_DISABLED = 'disabled';
 const WAITING_RETRY_MINUTES = 5;
 const ERROR_RETRY_MINUTES = 15;
 const METADATA_RETRY_MINUTES = 60;
+const WAITING_RETRY_BACKOFF_MINUTES = [5, 30, 120, 720];
+const ERROR_RETRY_BACKOFF_MINUTES = [15, 60, 240, 720];
+const METADATA_RETRY_BACKOFF_MINUTES = [60, 180, 360, 720];
 const ACCESS_TOKEN_EARLY_REFRESH_MS = 10 * 60 * 1000;
 const ACCESS_TOKEN_MINIMUM_REFRESH_MS = 60 * 1000;
 const HEURISTIC_FAST_PROBE_MS = 5 * 60 * 1000;
@@ -40,7 +48,7 @@ const HEURISTIC_MEDIUM_PROBE_MS = 15 * 60 * 1000;
 const HEURISTIC_SLOW_PROBE_MS = 60 * 60 * 1000;
 const HEURISTIC_MAX_PROBE_MS = 12 * 60 * 60 * 1000;
 const SCHEDULE_DUE_GRACE_MS = 30 * 1000;
-const MAX_BACKGROUND_WAKEUP_TABS = 6;
+const MAX_BACKGROUND_WAKEUP_TABS = 1;
 const TAB_LOAD_TIMEOUT_MS = 20000;
 const SESSION_DISCOVERY_TIMEOUT_MS = 10000;
 const SESSION_DISCOVERY_INTERVAL_MS = 500;
@@ -181,6 +189,11 @@ async function handleMessage(request = {}, sender = {}) {
         case 'updateSyncPreferences':
             return updateSyncPreferences({
                 periodicSyncMinutes: request.periodicSyncMinutes,
+                cookieStoreId
+            });
+        case 'updateStorePolicy':
+            return updateStorePolicy({
+                storePolicy: request.storePolicy,
                 cookieStoreId
             });
         case 'saveGlobalConfig':
@@ -329,6 +342,25 @@ async function updateSyncPreferences({
     };
 }
 
+async function updateStorePolicy({
+    storePolicy,
+    cookieStoreId = null
+} = {}) {
+    const normalizedStorePolicy = normalizeStorePolicy(storePolicy);
+    if (!normalizedStorePolicy) {
+        throw new Error('未知的 store 管理模式');
+    }
+
+    await saveStorePolicy(cookieStoreId, normalizedStorePolicy);
+    await refreshSafetyAlarm({ cookieStoreId });
+
+    return getSetupData(cookieStoreId, {
+        previewCurrentSession: true,
+        refreshConnection: false,
+        allowSessionMetadataLookup: false
+    });
+}
+
 async function connectBaseUrl(rawBaseUrl, rawAdminToken = '', cookieStoreId = null) {
     const normalized = normalizeBaseUrl(rawBaseUrl);
     const existingGlobalConfig = await loadGlobalConfig();
@@ -350,6 +382,7 @@ async function connectBaseUrl(rawBaseUrl, rawAdminToken = '', cookieStoreId = nu
         adminToken,
         connectionToken: ''
     });
+    await saveStorePolicy(cookieStoreId, STORE_POLICY_AUTO);
     await ensureConnectionTokenCache(normalized.origin, adminToken, {
         forceRefresh: true
     });
@@ -528,6 +561,11 @@ async function performSync({
     const effectiveBaseUrl = baseUrl || settings.baseUrl;
     const effectiveAdminToken = adminToken || settings.adminToken || null;
     const preferredSessionContext = settings.sessionContext || buildStoreSessionPreference(cookieStoreId);
+    const effectiveStorePolicy = settings.storePolicy || STORE_POLICY_OBSERVE;
+    const effectiveAllowLabsWakeup = allowLabsWakeup && shouldAllowLabsWakeup({
+        reason,
+        storePolicy: effectiveStorePolicy
+    });
 
     if (!effectiveBaseUrl) {
         return {
@@ -581,8 +619,9 @@ async function performSync({
         const sessionResolution = await resolveSessionCookie({
             baseUrl: effectiveBaseUrl,
             adminToken: effectiveAdminToken,
-            loadIfMissing: allowLabsWakeup,
-            preferredContext: preferredSessionContext
+            loadIfMissing: effectiveAllowLabsWakeup,
+            preferredContext: preferredSessionContext,
+            requestedStoreId: cookieStoreId
         });
         const sessionCookie = sessionResolution.cookie;
         derivedAccount = sessionResolution.derivedAccount;
@@ -638,11 +677,16 @@ async function performSync({
             action: syncPayload.action || null,
             message: syncPayload.message || '同步成功'
         };
+        const retryState = buildNextRetryState(settings.retryState, {
+            outcome: 'success',
+            hasAccountExpiry: Boolean(atExpires)
+        });
 
         await saveScopedSettings(cookieStoreId, {
             lastSync,
             sessionContext
         });
+        await saveRetryState(cookieStoreId, retryState);
         await saveSessionScopedLastSync(lastSync);
         if (refreshAlarm) {
             await refreshSafetyAlarm({
@@ -682,8 +726,13 @@ async function performSync({
                 action: null,
                 message: error.message
             };
+        const retryState = buildNextRetryState(settings.retryState, {
+            outcome: waitingForSession ? 'waiting_session' : 'sync_error',
+            hasAccountExpiry: false
+        });
 
         await saveScopedSettings(cookieStoreId, { lastSync });
+        await saveRetryState(cookieStoreId, retryState);
         await saveSessionScopedLastSync(lastSync);
         await (waitingForSession ? Logger.info : Logger.error).call(Logger, waitingForSession ? 'Waiting for Google Labs session' : 'Session sync failed', {
             reason,
@@ -1034,8 +1083,13 @@ async function getSessionCookie({
     let cookie = await findSessionCookie({ preferredContext });
 
     if (!cookie && loadIfMissing) {
-        const wakeupStoreIds = await collectSessionWakeupStoreIds(preferredContext);
+        const wakeupStoreIds = await collectSessionWakeupStoreIds({
+            preferredContext
+        });
         const tabs = await openLabsWakeupTabs(wakeupStoreIds);
+        if (tabs.length === 0) {
+            return cookie;
+        }
 
         try {
             await Promise.allSettled(tabs.map((tab) => waitForTabLoad(tab.id)));
@@ -1056,7 +1110,8 @@ async function resolveSessionCookie({
     baseUrl,
     adminToken = null,
     loadIfMissing,
-    preferredContext = null
+    preferredContext = null,
+    requestedStoreId = UNSET_VALUE
 }) {
     const initialCandidates = await listSessionCookieCandidates({ preferredContext });
     const initialResolution = adminToken
@@ -1074,8 +1129,14 @@ async function resolveSessionCookie({
         return initialResolution;
     }
 
-    const wakeupStoreIds = await collectSessionWakeupStoreIds(preferredContext);
+    const wakeupStoreIds = await collectSessionWakeupStoreIds({
+        preferredContext,
+        requestedStoreId
+    });
     const tabs = await openLabsWakeupTabs(wakeupStoreIds);
+    if (tabs.length === 0) {
+        return initialResolution;
+    }
 
     try {
         await Promise.allSettled(tabs.map((tab) => waitForTabLoad(tab.id)));
@@ -1181,6 +1242,10 @@ async function openLabsTab({ cookieStoreId = null } = {}) {
 }
 
 async function openLabsWakeupTabs(storeIds) {
+    if (!Array.isArray(storeIds) || storeIds.length === 0) {
+        return [];
+    }
+
     const tabs = [];
 
     for (const storeId of storeIds) {
@@ -1190,22 +1255,19 @@ async function openLabsWakeupTabs(storeIds) {
         }
     }
 
-    if (tabs.length === 0) {
-        const fallbackTab = await openLabsTab();
-        if (fallbackTab?.id) {
-            tabs.push(fallbackTab);
-        }
-    }
-
     return tabs;
 }
 
-async function collectSessionWakeupStoreIds(preferredContext = null) {
-    const discoveredStoreIds = await collectCandidateCookieStoreIds();
+async function collectSessionWakeupStoreIds({
+    preferredContext = null,
+    requestedStoreId = UNSET_VALUE
+} = {}) {
     const ordered = [];
     const seen = new Set();
 
-    const pushStoreId = (storeId) => {
+    const pushStoreId = async (storeId, {
+        force = false
+    } = {}) => {
         const normalized = normalizeCookieStoreId(storeId);
         const key = normalized || '__default__';
 
@@ -1213,18 +1275,42 @@ async function collectSessionWakeupStoreIds(preferredContext = null) {
             return;
         }
 
+        if (!force) {
+            const settings = await loadSettings({ cookieStoreId: normalized });
+            if (!shouldManageStoreAutomatically(settings.storePolicy)) {
+                return;
+            }
+        }
+
         seen.add(key);
         ordered.push(normalized);
     };
 
-    pushStoreId(preferredContext?.storeId || null);
-
-    for (const storeId of discoveredStoreIds) {
-        pushStoreId(storeId);
+    if (requestedStoreId !== UNSET_VALUE) {
+        await pushStoreId(requestedStoreId, {
+            force: true
+        });
+    } else if (preferredContext?.storeId) {
+        await pushStoreId(preferredContext.storeId, {
+            force: true
+        });
     }
 
     if (ordered.length === 0) {
-        pushStoreId(null);
+        const configuredStoreIds = await collectConfiguredCookieStoreIds();
+        for (const storeId of configuredStoreIds) {
+            await pushStoreId(storeId);
+            if (ordered.length >= MAX_BACKGROUND_WAKEUP_TABS) {
+                break;
+            }
+        }
+    }
+
+    if (ordered.length === 0) {
+        const defaultSettings = await loadSettings({ cookieStoreId: null });
+        if (shouldManageStoreAutomatically(defaultSettings.storePolicy)) {
+            await pushStoreId(null);
+        }
     }
 
     return ordered.slice(0, MAX_BACKGROUND_WAKEUP_TABS);
@@ -1477,7 +1563,7 @@ async function buildSafetySchedule({
 
     for (const currentCookieStoreId of targetStoreIds) {
         const scopedSettings = await loadSettings({ cookieStoreId: currentCookieStoreId });
-        if (!scopedSettings.baseUrl) {
+        if (!scopedSettings.baseUrl || !shouldManageStoreAutomatically(scopedSettings.storePolicy)) {
             continue;
         }
 
@@ -1506,14 +1592,15 @@ async function buildSafetySchedule({
             now,
             accountExpiryMs
         });
+        const retryState = scopedSettings.retryState || emptyRetryState();
         const metadataRetryAt = !accountExpiryMs && scopedSettings.lastSync?.status === 'success'
-            ? now + METADATA_RETRY_MINUTES * 60 * 1000
+            ? now + resolveMetadataRetryMinutes(retryState) * 60 * 1000
             : null;
         const errorRetryAt = scopedSettings.lastSync?.status === 'error'
-            ? now + ERROR_RETRY_MINUTES * 60 * 1000
+            ? now + resolveErrorRetryMinutes(retryState) * 60 * 1000
             : null;
         const waitingRetryAt = scopedSettings.lastSync?.status === 'waiting_session'
-            ? now + WAITING_RETRY_MINUTES * 60 * 1000
+            ? now + resolveWaitingRetryMinutes(retryState) * 60 * 1000
             : null;
         const scope = buildSafetyScheduleScope({
             cookieStoreId: currentCookieStoreId,
@@ -1554,6 +1641,10 @@ async function handleLabsSessionRemoved(changeInfo, cookieStoreId = null) {
     }
 
     const settings = await loadSettings({ cookieStoreId });
+    if (!shouldManageStoreAutomatically(settings.storePolicy)) {
+        return;
+    }
+
     if (!settings.baseUrl || (!settings.adminToken && !settings.connectionToken)) {
         return;
     }
@@ -2317,14 +2408,26 @@ async function loadSettings({ cookieStoreId = null } = {}) {
     const scopedState = await loadStoreScopedState();
     const globalConfig = await loadGlobalConfig();
     const storeKey = storeKeyFromCookieStoreId(cookieStoreId);
+    const explicitStorePolicy = scopedState.storePolicyByStore[storeKey] || null;
+    const lastSync = scopedState.lastSyncByStore[storeKey] || null;
+    const sessionContext = scopedState.sessionContextByStore[storeKey] || null;
 
     return {
         baseUrl: globalConfig.baseUrl || '',
         adminToken: globalConfig.adminToken || '',
         connectionToken: globalConfig.connectionToken || '',
-        lastSync: scopedState.lastSyncByStore[storeKey] || null,
-        sessionContext: scopedState.sessionContextByStore[storeKey] || null,
+        lastSync,
+        sessionContext,
         consoleContext: scopedState.consoleContextByStore[storeKey] || null,
+        retryState: scopedState.retryStateByStore[storeKey] || emptyRetryState(),
+        storePolicy: resolveEffectiveStorePolicy({
+            cookieStoreId,
+            scopedState,
+            explicitPolicy: explicitStorePolicy,
+            lastSync,
+            sessionContext
+        }),
+        explicitStorePolicy,
         configSource: globalConfig.baseUrl ? 'global' : 'none',
         hasAdminToken: Boolean(globalConfig.adminToken),
         hasCachedConnectionToken: Boolean(globalConfig.connectionToken)
@@ -2339,13 +2442,17 @@ async function loadStoreScopedState() {
         'consoleContext',
         LAST_SYNC_BY_STORE_KEY,
         SESSION_CONTEXT_BY_STORE_KEY,
-        CONSOLE_CONTEXT_BY_STORE_KEY
+        CONSOLE_CONTEXT_BY_STORE_KEY,
+        STORE_POLICY_BY_STORE_KEY,
+        RETRY_STATE_BY_STORE_KEY
     ]);
 
     const configByStore = normalizeStoreScopedMap(stored[CONFIG_BY_STORE_KEY], normalizeScopedConfig);
     const lastSyncByStore = normalizeStoreScopedMap(stored[LAST_SYNC_BY_STORE_KEY], normalizeLastSyncValue);
     const sessionContextByStore = normalizeStoreScopedMap(stored[SESSION_CONTEXT_BY_STORE_KEY], normalizeSessionContext);
     const consoleContextByStore = normalizeStoreScopedMap(stored[CONSOLE_CONTEXT_BY_STORE_KEY], normalizeConsoleContext);
+    const storePolicyByStore = normalizeStoreScopedMap(stored[STORE_POLICY_BY_STORE_KEY], normalizeStorePolicy);
+    const retryStateByStore = normalizeStoreScopedMap(stored[RETRY_STATE_BY_STORE_KEY], normalizeRetryState);
 
     const legacyLastSync = normalizeLastSyncValue(stored.lastSync);
     const legacySessionContext = normalizeSessionContext(stored.sessionContext);
@@ -2368,7 +2475,9 @@ async function loadStoreScopedState() {
         configByStore,
         lastSyncByStore,
         sessionContextByStore,
-        consoleContextByStore
+        consoleContextByStore,
+        storePolicyByStore,
+        retryStateByStore
     };
 }
 
@@ -2547,6 +2656,8 @@ function buildPublicSettings(settings, {
         lastSync,
         sessionContext: settings?.sessionContext || null,
         consoleContext: settings?.consoleContext || null,
+        storePolicy: settings?.storePolicy || STORE_POLICY_OBSERVE,
+        explicitStorePolicy: settings?.explicitStorePolicy || null,
         configSource: settings?.configSource || 'none',
         periodicSyncMinutes: normalizedPreferences.periodicSyncMinutes,
         nextScheduledAt: normalizedScheduledScope?.scheduledAt || null,
@@ -2679,6 +2790,67 @@ function normalizeScheduledScope(value) {
 function normalizeOptionalIsoString(value) {
     const parsed = parseDateSafe(value);
     return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
+function normalizeStorePolicy(value) {
+    switch (value) {
+        case STORE_POLICY_AUTO:
+        case STORE_POLICY_OBSERVE:
+        case STORE_POLICY_DISABLED:
+            return value;
+        default:
+            return null;
+    }
+}
+
+function normalizeRetryState(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return null;
+    }
+
+    const waitingSessionCount = clampRetryCount(value.waitingSessionCount);
+    const syncErrorCount = clampRetryCount(value.syncErrorCount);
+    const metadataRetryCount = clampRetryCount(value.metadataRetryCount);
+    const lastFailureCategory = normalizeScheduleReason(value.lastFailureCategory);
+    const lastAttemptAt = normalizeOptionalIsoString(value.lastAttemptAt);
+    const lastSuccessAt = normalizeOptionalIsoString(value.lastSuccessAt);
+
+    if (!waitingSessionCount
+        && !syncErrorCount
+        && !metadataRetryCount
+        && !lastFailureCategory
+        && !lastAttemptAt
+        && !lastSuccessAt) {
+        return null;
+    }
+
+    return {
+        waitingSessionCount,
+        syncErrorCount,
+        metadataRetryCount,
+        lastFailureCategory,
+        lastAttemptAt,
+        lastSuccessAt
+    };
+}
+
+function emptyRetryState() {
+    return {
+        waitingSessionCount: 0,
+        syncErrorCount: 0,
+        metadataRetryCount: 0,
+        lastFailureCategory: null,
+        lastAttemptAt: null,
+        lastSuccessAt: null
+    };
+}
+
+function clampRetryCount(value) {
+    if (!Number.isFinite(value)) {
+        return 0;
+    }
+
+    return Math.max(0, Math.min(99, Math.round(value)));
 }
 
 function normalizeScheduleReason(value) {
@@ -2851,30 +3023,59 @@ async function saveScopedSettings(cookieStoreId, {
     }
 }
 
+async function saveStorePolicy(cookieStoreId, storePolicy) {
+    const scopedState = await loadStoreScopedState();
+    const storeKey = storeKeyFromCookieStoreId(cookieStoreId);
+    const normalizedStorePolicy = normalizeStorePolicy(storePolicy);
+
+    if (normalizedStorePolicy) {
+        scopedState.storePolicyByStore[storeKey] = normalizedStorePolicy;
+    } else {
+        delete scopedState.storePolicyByStore[storeKey];
+    }
+
+    await extensionApi.storage.local.set({
+        [STORE_POLICY_BY_STORE_KEY]: scopedState.storePolicyByStore
+    });
+}
+
+async function saveRetryState(cookieStoreId, retryState) {
+    const scopedState = await loadStoreScopedState();
+    const storeKey = storeKeyFromCookieStoreId(cookieStoreId);
+    const normalizedRetryState = normalizeRetryState(retryState);
+
+    if (normalizedRetryState) {
+        scopedState.retryStateByStore[storeKey] = normalizedRetryState;
+    } else {
+        delete scopedState.retryStateByStore[storeKey];
+    }
+
+    await extensionApi.storage.local.set({
+        [RETRY_STATE_BY_STORE_KEY]: scopedState.retryStateByStore
+    });
+}
+
 async function collectConfiguredCookieStoreIds() {
     const globalConfig = await loadGlobalConfig();
     const scopedState = await loadStoreScopedState();
     const storeKeys = new Set();
 
     if (globalConfig.baseUrl) {
-        for (const storeKey of Object.keys(scopedState.lastSyncByStore)) {
-            storeKeys.add(storeKey);
-        }
+        for (const storeKey of [
+            ...Object.keys(scopedState.lastSyncByStore),
+            ...Object.keys(scopedState.sessionContextByStore),
+            ...Object.keys(scopedState.consoleContextByStore),
+            ...Object.keys(scopedState.storePolicyByStore)
+        ]) {
+            const cookieStoreId = cookieStoreIdFromStoreKey(storeKey);
+            const storePolicy = resolveEffectiveStorePolicy({
+                cookieStoreId,
+                scopedState
+            });
 
-        for (const storeKey of Object.keys(scopedState.sessionContextByStore)) {
-            storeKeys.add(storeKey);
-        }
-
-        for (const storeKey of Object.keys(scopedState.consoleContextByStore)) {
-            storeKeys.add(storeKey);
-        }
-
-        for (const cookieStoreId of await collectCandidateCookieStoreIds()) {
-            storeKeys.add(storeKeyFromCookieStoreId(cookieStoreId));
-        }
-
-        if (storeKeys.size === 0) {
-            storeKeys.add(DEFAULT_STORE_KEY);
+            if (storePolicy === STORE_POLICY_AUTO) {
+                storeKeys.add(storeKeyFromCookieStoreId(cookieStoreId));
+            }
         }
     } else {
         for (const [storeKey, config] of Object.entries(scopedState.configByStore)) {
@@ -2891,13 +3092,18 @@ async function hasKnownStoreState(cookieStoreId, scopedState = null) {
     const effectiveScopedState = scopedState || await loadStoreScopedState();
     const storeKey = storeKeyFromCookieStoreId(cookieStoreId);
     const globalConfig = await loadGlobalConfig();
+    const effectiveStorePolicy = resolveEffectiveStorePolicy({
+        cookieStoreId,
+        scopedState: effectiveScopedState
+    });
 
     return Boolean(
-        globalConfig.baseUrl
+        (globalConfig.baseUrl && effectiveStorePolicy !== STORE_POLICY_DISABLED)
         || effectiveScopedState.configByStore[storeKey]?.baseUrl
         || effectiveScopedState.lastSyncByStore[storeKey]
         || effectiveScopedState.sessionContextByStore[storeKey]
         || effectiveScopedState.consoleContextByStore[storeKey]
+        || effectiveScopedState.storePolicyByStore[storeKey]
     );
 }
 
@@ -3239,6 +3445,142 @@ function cookieStoreIdFromStoreKey(storeKey) {
         : normalizeCookieStoreId(storeKey);
 }
 
+function resolveEffectiveStorePolicy({
+    cookieStoreId = null,
+    scopedState = null,
+    explicitPolicy = UNSET_VALUE,
+    lastSync = UNSET_VALUE,
+    sessionContext = UNSET_VALUE
+} = {}) {
+    const effectiveScopedState = scopedState || null;
+    const storeKey = storeKeyFromCookieStoreId(cookieStoreId);
+    const normalizedExplicitPolicy = explicitPolicy === UNSET_VALUE
+        ? normalizeStorePolicy(effectiveScopedState?.storePolicyByStore?.[storeKey] || null)
+        : normalizeStorePolicy(explicitPolicy);
+
+    if (normalizedExplicitPolicy) {
+        return normalizedExplicitPolicy;
+    }
+
+    const effectiveLastSync = lastSync === UNSET_VALUE
+        ? effectiveScopedState?.lastSyncByStore?.[storeKey] || null
+        : normalizeLastSyncValue(lastSync);
+    const effectiveSessionContext = sessionContext === UNSET_VALUE
+        ? effectiveScopedState?.sessionContextByStore?.[storeKey] || null
+        : normalizeSessionContext(sessionContext);
+
+    if (effectiveLastSync?.status === 'success') {
+        return STORE_POLICY_AUTO;
+    }
+
+    if (effectiveSessionContext && effectiveLastSync) {
+        return STORE_POLICY_AUTO;
+    }
+
+    if (effectiveSessionContext || effectiveLastSync) {
+        return STORE_POLICY_OBSERVE;
+    }
+
+    return STORE_POLICY_OBSERVE;
+}
+
+function shouldManageStoreAutomatically(storePolicy) {
+    return normalizeStorePolicy(storePolicy) === STORE_POLICY_AUTO;
+}
+
+function shouldIgnoreStore(storePolicy) {
+    return normalizeStorePolicy(storePolicy) === STORE_POLICY_DISABLED;
+}
+
+function shouldAllowLabsWakeup({
+    reason,
+    storePolicy
+}) {
+    if (reason === 'manual_sync' || reason === 'manual_connect') {
+        return true;
+    }
+
+    return shouldManageStoreAutomatically(storePolicy);
+}
+
+function buildNextRetryState(previousRetryState, {
+    outcome,
+    hasAccountExpiry = false
+} = {}) {
+    const previous = normalizeRetryState(previousRetryState) || emptyRetryState();
+    const nowIso = new Date().toISOString();
+
+    if (outcome === 'success') {
+        return {
+            waitingSessionCount: 0,
+            syncErrorCount: 0,
+            metadataRetryCount: hasAccountExpiry
+                ? 0
+                : clampRetryCount(previous.metadataRetryCount + 1),
+            lastFailureCategory: null,
+            lastAttemptAt: nowIso,
+            lastSuccessAt: nowIso
+        };
+    }
+
+    if (outcome === 'waiting_session') {
+        return {
+            waitingSessionCount: clampRetryCount(previous.waitingSessionCount + 1),
+            syncErrorCount: 0,
+            metadataRetryCount: 0,
+            lastFailureCategory: 'waiting_session',
+            lastAttemptAt: nowIso,
+            lastSuccessAt: previous.lastSuccessAt || null
+        };
+    }
+
+    return {
+        waitingSessionCount: 0,
+        syncErrorCount: clampRetryCount(previous.syncErrorCount + 1),
+        metadataRetryCount: 0,
+        lastFailureCategory: 'sync_error',
+        lastAttemptAt: nowIso,
+        lastSuccessAt: previous.lastSuccessAt || null
+    };
+}
+
+function resolveBackoffMinutes(sequence, count, fallbackMinutes) {
+    const normalizedCount = clampRetryCount(count);
+    if (!Array.isArray(sequence) || sequence.length === 0) {
+        return fallbackMinutes;
+    }
+
+    if (normalizedCount <= 0) {
+        return fallbackMinutes;
+    }
+
+    return sequence[Math.min(sequence.length - 1, normalizedCount - 1)];
+}
+
+function resolveMetadataRetryMinutes(retryState) {
+    return resolveBackoffMinutes(
+        METADATA_RETRY_BACKOFF_MINUTES,
+        retryState?.metadataRetryCount || 0,
+        METADATA_RETRY_MINUTES
+    );
+}
+
+function resolveErrorRetryMinutes(retryState) {
+    return resolveBackoffMinutes(
+        ERROR_RETRY_BACKOFF_MINUTES,
+        retryState?.syncErrorCount || 0,
+        ERROR_RETRY_MINUTES
+    );
+}
+
+function resolveWaitingRetryMinutes(retryState) {
+    return resolveBackoffMinutes(
+        WAITING_RETRY_BACKOFF_MINUTES,
+        retryState?.waitingSessionCount || 0,
+        WAITING_RETRY_MINUTES
+    );
+}
+
 function buildStoreSessionPreference(cookieStoreId) {
     const normalized = normalizeCookieStoreId(cookieStoreId);
     if (!normalized) {
@@ -3298,9 +3640,13 @@ function clampNumber(value, minimum, maximum) {
 
 async function handleTrackedSessionCookieChange(changeInfo) {
     const cookieStoreId = normalizeCookieStoreId(changeInfo.cookie?.storeId || null);
+    const settings = await loadSettings({ cookieStoreId });
+
+    if (shouldIgnoreStore(settings.storePolicy)) {
+        return;
+    }
 
     if (changeInfo.removed) {
-        const settings = await loadSettings({ cookieStoreId });
         if (settings.sessionContext && !doesCookieMatchContext(changeInfo.cookie, settings.sessionContext)) {
             return;
         }

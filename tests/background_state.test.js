@@ -106,3 +106,47 @@ test('createWaitingSessionState keeps the last successful account identity for r
     assert.equal(waitingState.atExpires, '2026-01-01T08:00:00.000Z');
     assert.equal(waitingState.sessionFingerprint, 'st_deadbeef');
 });
+
+test('resolveEffectiveStorePolicy keeps explicit choices and auto-managed store history', () => {
+    const background = createBackground();
+
+    assert.equal(
+        background.resolveEffectiveStorePolicy({
+            explicitPolicy: 'disabled'
+        }),
+        'disabled'
+    );
+
+    assert.equal(
+        background.resolveEffectiveStorePolicy({
+            lastSync: {
+                status: 'success'
+            }
+        }),
+        'auto'
+    );
+
+    assert.equal(
+        background.resolveEffectiveStorePolicy({
+            lastSync: {
+                status: 'error'
+            },
+            sessionContext: {
+                storeId: 'firefox-container-9',
+                domain: 'labs.google',
+                path: '/',
+                name: '__Secure-next-auth.session-token'
+            }
+        }),
+        'auto'
+    );
+
+    assert.equal(
+        background.resolveEffectiveStorePolicy({
+            lastSync: {
+                status: 'waiting_session'
+            }
+        }),
+        'observe'
+    );
+});

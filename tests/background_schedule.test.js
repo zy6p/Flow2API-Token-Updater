@@ -104,3 +104,32 @@ test('buildSafetyScheduleCandidates includes metadata and error retries when the
         }
     );
 });
+
+test('retry backoff helpers escalate for noisy stores', () => {
+    const background = createBackground();
+
+    assert.equal(
+        background.resolveWaitingRetryMinutes({
+            waitingSessionCount: 1
+        }),
+        5
+    );
+    assert.equal(
+        background.resolveWaitingRetryMinutes({
+            waitingSessionCount: 3
+        }),
+        120
+    );
+    assert.equal(
+        background.resolveErrorRetryMinutes({
+            syncErrorCount: 2
+        }),
+        60
+    );
+    assert.equal(
+        background.resolveMetadataRetryMinutes({
+            metadataRetryCount: 4
+        }),
+        720
+    );
+});

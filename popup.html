@@ -416,6 +416,18 @@
                     就算没有明显变化，扩展也会按这个间隔自动重刷一次。
                 </div>
             </div>
+
+            <div class="setting-stack">
+                <label for="storePolicy">当前 store 管理模式</label>
+                <select id="storePolicy">
+                    <option value="auto">主动管理</option>
+                    <option value="observe">轻量跟随</option>
+                    <option value="disabled">停用</option>
+                </select>
+                <div class="hint" id="storePolicyHint">
+                    主动管理：这个 store 会参与定时检查，也允许后台唤醒 Labs 页来自动恢复会话。
+                </div>
+            </div>
         </div>
 
         <div class="status" id="status"></div>
