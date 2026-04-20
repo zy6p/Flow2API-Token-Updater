@@ -55,6 +55,7 @@
     未签名的 `.xpi` 在 Firefox / Zen 的 `about:addons` 正式安装路径里通常会显示“附加组件似乎已损坏”，这不是代码损坏，而是签名校验未通过。
     Firefox / Zen 不要直接加载仓库根目录的 `manifest.json`。仓库根目录是给 Chromium 和 Gecko 共用的开发源，Gecko 请优先使用上面生成的临时包，或下面的运行脚本。
     如果要做长期安装，请优先使用签名后的自更新 XPI：`https://banana.rematrixed.com/downloads/latest-firefox-selfhost.xpi`。
+    只要 Firefox / Zen 提示“未经验证”或“附加组件似乎已损坏”，就把该包视为无效发布件，不要继续分发；正式用户安装只能使用验证通过的签名包。
     临时加载扩展不会自动更新；如果你有很多 profile，需要无感更新，不要继续走临时加载路径。
 
 5.  **命令行启动开发态临时扩展**

@@ -8,6 +8,7 @@ const { spawnSync } = require('node:child_process');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 const { loadAmoCredentials } = require(path.join(ROOT_DIR, 'scripts', 'amo_credentials.js'));
+const { validateGeckoSignedBundle } = require(path.join(ROOT_DIR, 'scripts', 'validate_gecko_signed_bundle.js'));
 const SIGNING_API_BASE = (process.env.AMO_SIGNING_API_BASE || 'https://addons.mozilla.org/api/v3').trim().replace(/\/$/, '');
 const { apiKey: API_KEY, apiSecret: API_SECRET } = loadAmoCredentials(ROOT_DIR);
 const PUBLIC_BASE_URL = (process.env.FLOW2API_PUBLIC_BASE_URL || 'https://banana.rematrixed.com').trim().replace(/\/$/, '');
@@ -44,6 +45,10 @@ async function main() {
         }
 
         await downloadFile(downloadUrl, OUTPUT_PATH);
+        const validation = validateGeckoSignedBundle(OUTPUT_PATH);
+        if (!validation.valid) {
+            throw new Error(`Downloaded AMO artifact is not a signed Firefox XPI: ${validation.reason}`);
+        }
         console.log(`Downloaded signed self-hosted XPI: ${OUTPUT_PATH}`);
     } finally {
         fs.rmSync(stageDir, { recursive: true, force: true });
@@ -231,7 +236,7 @@ async function waitForSignedStatus(statusUrl) {
             lastSnapshot = snapshot;
         }
 
-        if (current.processed && current.valid && file?.download_url) {
+        if (current.processed && current.valid && file?.download_url && file?.signed) {
             return current;
         }
 

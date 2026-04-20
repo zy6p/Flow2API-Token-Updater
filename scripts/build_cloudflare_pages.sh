@@ -47,14 +47,14 @@ CHROMIUM_SHA256="$(hash_file "${OUT_DIR}/downloads/${CHROMIUM_VERSIONED_FILE}")"
 GECKO_SELFHOST_SHA256=""
 GECKO_SELFHOST_UPDATE_URL=""
 GECKO_SELFHOST_AVAILABLE="0"
-if [[ -f "${FIREFOX_DIR}/${GECKO_SELFHOST_XPI}" ]]; then
+if [[ -f "${FIREFOX_DIR}/${GECKO_SELFHOST_XPI}" ]] && node "${ROOT_DIR}/scripts/validate_gecko_signed_bundle.js" "${FIREFOX_DIR}/${GECKO_SELFHOST_XPI}" >/dev/null; then
   cp "${FIREFOX_DIR}/${GECKO_SELFHOST_XPI}" "${OUT_DIR}/downloads/latest-firefox-selfhost.xpi"
   cp "${FIREFOX_DIR}/${GECKO_SELFHOST_XPI}" "${OUT_DIR}/downloads/${GECKO_SELFHOST_XPI}"
   GECKO_SELFHOST_SHA256="$(hash_file "${OUT_DIR}/downloads/${GECKO_SELFHOST_XPI}")"
   GECKO_SELFHOST_UPDATE_URL="${PUBLIC_BASE_URL}/downloads/updates.json"
   GECKO_SELFHOST_AVAILABLE="1"
 else
-  printf 'Warning: Firefox self-hosted XPI not found at %s; download page will only expose the temporary Gecko bundle.\n' "${FIREFOX_DIR}/${GECKO_SELFHOST_XPI}" >&2
+  printf 'Warning: Firefox self-hosted XPI missing or not signed at %s; download page will only expose the temporary Gecko bundle.\n' "${FIREFOX_DIR}/${GECKO_SELFHOST_XPI}" >&2
 fi
 
 ROOT_DIR="${ROOT_DIR}" BUILD_DATE="${BUILD_DATE}" GECKO_TEMP_FILE="${GECKO_TEMP_FILE}" CHROMIUM_VERSIONED_FILE="${CHROMIUM_VERSIONED_FILE}" GECKO_SHA256="${GECKO_SHA256}" CHROMIUM_SHA256="${CHROMIUM_SHA256}" GECKO_SELFHOST_XPI="${GECKO_SELFHOST_XPI}" GECKO_SELFHOST_SHA256="${GECKO_SELFHOST_SHA256}" GECKO_SELFHOST_UPDATE_URL="${GECKO_SELFHOST_UPDATE_URL}" SELFHOST_VERSION="${SELFHOST_VERSION}" node <<'EOF' > "${OUT_DIR}/downloads/latest.json"
