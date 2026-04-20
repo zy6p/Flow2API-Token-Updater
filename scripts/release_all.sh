@@ -72,10 +72,12 @@ if [[ "${RELEASE_REQUIRE_SELFHOST}" == "1" && ! -f "${SELFHOST_XPI}" ]]; then
   exit 1
 fi
 
-if [[ "${RELEASE_REQUIRE_SELFHOST}" == "1" && ! node "${ROOT_DIR}/scripts/validate_gecko_signed_bundle.js" "${SELFHOST_XPI}" >/dev/null ]]; then
-  echo "Firefox self-hosted XPI is present but not actually signed: ${SELFHOST_XPI}" >&2
-  echo "Release aborted so the download page cannot expose an unverified Firefox bundle." >&2
-  exit 1
+if [[ "${RELEASE_REQUIRE_SELFHOST}" == "1" ]]; then
+  if ! node "${ROOT_DIR}/scripts/validate_gecko_signed_bundle.js" "${SELFHOST_XPI}" >/dev/null; then
+    echo "Firefox self-hosted XPI is present but not actually signed: ${SELFHOST_XPI}" >&2
+    echo "Release aborted so the download page cannot expose an unverified Firefox bundle." >&2
+    exit 1
+  fi
 fi
 
 HEAD_SHA="$(git rev-parse HEAD)"
