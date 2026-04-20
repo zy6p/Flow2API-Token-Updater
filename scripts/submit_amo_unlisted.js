@@ -39,12 +39,14 @@ async function main() {
 
         const initial = await submitOrFetchExisting(uploadPackage, SELFHOST_VERSION);
         const signed = await waitForSignedStatus(initial.url || signingStatusUrl(SELFHOST_VERSION));
-        const downloadUrl = signed.files?.[0]?.download_url || '';
+        const signedFile = getSignedFileMetadata(signed);
+        const downloadUrl = signedFile.download_url;
         if (!downloadUrl) {
             throw new Error('Mozilla signing API did not return a signed download URL');
         }
 
         await downloadFile(downloadUrl, OUTPUT_PATH);
+        verifyDownloadedHash(OUTPUT_PATH, signedFile.hash);
         const validation = validateGeckoSignedBundle(OUTPUT_PATH);
         if (!validation.valid) {
             throw new Error(`Downloaded AMO artifact is not a signed Firefox XPI: ${validation.reason}`);
@@ -236,7 +238,7 @@ async function waitForSignedStatus(statusUrl) {
             lastSnapshot = snapshot;
         }
 
-        if (current.processed && current.valid && file?.download_url && file?.signed) {
+        if (current.processed && current.valid && file?.download_url && file?.signed && isSignedXpiDownload(file.download_url)) {
             return current;
         }
 
@@ -245,6 +247,36 @@ async function waitForSignedStatus(statusUrl) {
         }
 
         await sleep(POLL_INTERVAL_MS);
+    }
+}
+
+function getSignedFileMetadata(signingStatus) {
+    const file = signingStatus?.files?.[0] || null;
+    if (!file?.download_url || !file?.signed) {
+        throw new Error('Mozilla signing API did not expose a signed file yet');
+    }
+
+    if (!isSignedXpiDownload(file.download_url)) {
+        throw new Error(`Mozilla signing API returned a non-XPI artifact: ${file.download_url}`);
+    }
+
+    return file;
+}
+
+function isSignedXpiDownload(downloadUrl) {
+    const normalized = `${downloadUrl || ''}`.trim().toLowerCase();
+    return normalized.endsWith('.xpi');
+}
+
+function verifyDownloadedHash(filePath, expectedHash) {
+    const expected = `${expectedHash || ''}`.trim().toLowerCase();
+    if (!expected.startsWith('sha256:')) {
+        return;
+    }
+
+    const actual = crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+    if (`sha256:${actual}` !== expected) {
+        throw new Error(`Downloaded signed XPI hash mismatch: expected ${expected}, got sha256:${actual}`);
     }
 }
 
