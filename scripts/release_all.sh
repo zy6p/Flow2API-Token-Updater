@@ -35,6 +35,7 @@ ORIGIN_REPO="${RELEASE_GH_REPO:-$(remote_repo_slug "${ORIGIN_REMOTE}")}"
 UPSTREAM_REPO="${RELEASE_UPSTREAM_REPO:-$(remote_repo_slug "${UPSTREAM_REMOTE}" 2>/dev/null || true)}"
 PAGES_PROJECT="${CF_PAGES_PROJECT:-banana-rematrixed-com}"
 RELEASE_WITH_AMO_LISTED="${RELEASE_WITH_AMO_LISTED:-0}"
+RELEASE_WITH_CWS="${RELEASE_WITH_CWS:-0}"
 RELEASE_REQUIRE_SELFHOST="${RELEASE_REQUIRE_SELFHOST:-1}"
 HEAD_SHA=""
 
@@ -63,6 +64,11 @@ if [[ "${RELEASE_WITH_AMO_LISTED}" == "1" ]]; then
   AMO_LISTED_ENABLED=1 ./scripts/sign_amo_listed.sh
 else
   echo "Skipping AMO listed release; set RELEASE_WITH_AMO_LISTED=1 to enable it"
+fi
+if [[ "${RELEASE_WITH_CWS}" == "1" ]]; then
+  ./scripts/sign_cws.sh
+else
+  echo "Skipping Chrome Web Store release; set RELEASE_WITH_CWS=1 to enable it"
 fi
 ./scripts/build_cloudflare_pages.sh
 

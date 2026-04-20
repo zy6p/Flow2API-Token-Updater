@@ -1,6 +1,8 @@
 .cloudflare-pages/
+.playwright-cli/
 dist/
 .wrangler/
 web-ext-artifacts/
 .firefox-developers-token.txt
+.chrome-web-store-credentials.txt
 node_modules/

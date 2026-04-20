@@ -81,13 +81,13 @@
 
     默认推荐直接填写 Flow2API 后台用户名和密码。
     扩展会临时登录后台，自动换取并保存插件专用的长期低权限 `connection_token`，然后立刻丢弃后台 session；密码默认不会落盘。
-    如果你已经手里有 `connection_token`，也可以在 popup 的高级区域里手动覆盖。
     ![配置界面](image-2.png)
 
 2.  **首次连接**
-    点击 `保存并接管同步`。
+    点击 `登录并接管同步`。
     - 扩展会先保存全局 `Base URL`。
     - 如果你输入了后台用户名和密码，扩展会临时登录后台并换取 `connection_token`。
+    - 登录成功后，设置区会自动折叠；后续打开 popup 时会默认先同步当前 store。
     - 日常自动同步只使用 `connection_token`，不再依赖后台打开控制台页，也不再依赖后台登录 session 常驻有效。
     - 如果当前 profile 已经具备 Google Labs 登录态，但你没开 Labs 页面：扩展会后台静默打开一次 Labs flow 页面完成会话发现，然后自动关闭。
 
@@ -149,7 +149,10 @@
 - 如果要发布到扩展市场，建议准备一个可公开访问的 HTTPS 隐私政策页面
 - Chrome Web Store 会重点检查敏感权限、数据用途与隐私披露
 - Firefox / Zen 生态通常需要签名后的 XPI 包；长期使用建议走自分发签名包 + `updates.json` 自动更新链
-- 默认的一键发布命令 `./scripts/release_all.sh` 只会发布自签名 XPI、GitHub Release 和 banana 下载页；如果未来需要恢复官方 AMO listed，请显式使用 `RELEASE_WITH_AMO_LISTED=1 ./scripts/release_all.sh`
+- 默认的一键发布命令 `./scripts/release_all.sh` 只会发布自签名 XPI、GitHub Release 和 banana 下载页；如果需要同时推官方市场：
+  - AMO listed：`RELEASE_WITH_AMO_LISTED=1 ./scripts/release_all.sh`
+  - Chrome Web Store：`RELEASE_WITH_CWS=1 ./scripts/release_all.sh`
+  - 仓库里也提供了单独的 Chrome 提交流程：`./scripts/sign_cws.sh`
 
 ## 七、 开发测试
 
