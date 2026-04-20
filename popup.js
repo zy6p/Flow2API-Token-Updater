@@ -291,7 +291,6 @@ async function connectFlow2Api() {
     try {
         const baseUrl = collectBaseUrl();
         const originPattern = toOriginPattern(baseUrl);
-        const cookieStoreId = await getCurrentCookieStoreId();
         const connectionTokenInput = readConnectionTokenInput();
         const passwordInput = readBootstrapPasswordInput();
 
@@ -299,6 +298,7 @@ async function connectFlow2Api() {
         showStatus('正在保存 Flow2API 全局配置...', 'info');
 
         await ensureHostPermission(originPattern);
+        const cookieStoreId = await getCurrentCookieStoreId();
 
         let response;
 
@@ -366,13 +366,13 @@ async function syncCurrentProfile() {
         const baseUrl = collectBaseUrl();
         const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
         const originPattern = toOriginPattern(normalizedBaseUrl);
-        const cookieStoreId = await getCurrentCookieStoreId();
         const connectionTokenOverride = collectConnectionToken(true);
 
         setBusy(true);
         showStatus('正在检查当前 store 的 Google Labs 登录态...', 'info');
 
         await ensureHostPermission(originPattern);
+        const cookieStoreId = await getCurrentCookieStoreId();
 
         let response;
 

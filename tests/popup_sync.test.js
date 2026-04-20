@@ -71,3 +71,23 @@ test('shouldPersistGlobalConfigBeforeSync persists a freshly entered connection 
         false
     );
 });
+
+test('connectFlow2Api requests host permission before resolving the current cookie store', () => {
+    const popup = loadPopupHelpers();
+    const source = popup.connectFlow2Api.toString();
+
+    assert.ok(
+        source.indexOf('await ensureHostPermission(originPattern);')
+            < source.indexOf('const cookieStoreId = await getCurrentCookieStoreId();')
+    );
+});
+
+test('syncCurrentProfile requests host permission before resolving the current cookie store', () => {
+    const popup = loadPopupHelpers();
+    const source = popup.syncCurrentProfile.toString();
+
+    assert.ok(
+        source.indexOf('await ensureHostPermission(originPattern);')
+            < source.indexOf('const cookieStoreId = await getCurrentCookieStoreId();')
+    );
+});
