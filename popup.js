@@ -351,6 +351,7 @@ async function syncCurrentProfile() {
         const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
         const originPattern = toOriginPattern(normalizedBaseUrl);
         const cookieStoreId = await getCurrentCookieStoreId();
+        const adminTokenOverride = collectAdminToken(true);
 
         setBusy(true);
         showStatus('正在检查当前 store 的 Google Labs 登录态...', 'info');
@@ -359,11 +360,16 @@ async function syncCurrentProfile() {
 
         let response;
 
-        if (!state.baseUrl || state.baseUrl !== normalizedBaseUrl || !state.hasAdminToken) {
+        if (shouldPersistGlobalConfigBeforeSync({
+            currentBaseUrl: state.baseUrl,
+            requestedBaseUrl: normalizedBaseUrl,
+            hasSavedAdminToken: state.hasAdminToken,
+            adminTokenOverride
+        })) {
             response = await extensionApi.runtime.sendMessage({
                 action: 'saveGlobalConfig',
                 baseUrl: normalizedBaseUrl,
-                adminToken: collectAdminToken(true),
+                adminToken: adminTokenOverride,
                 cookieStoreId
             });
         } else {
@@ -405,6 +411,23 @@ async function syncCurrentProfile() {
     } finally {
         setBusy(false);
     }
+}
+
+function shouldPersistGlobalConfigBeforeSync({
+    currentBaseUrl = '',
+    requestedBaseUrl = '',
+    hasSavedAdminToken = false,
+    adminTokenOverride = ''
+} = {}) {
+    if (typeof adminTokenOverride === 'string' && adminTokenOverride.trim()) {
+        return true;
+    }
+
+    if (!currentBaseUrl || currentBaseUrl !== requestedBaseUrl) {
+        return true;
+    }
+
+    return !hasSavedAdminToken;
 }
 
 async function openConsole() {
