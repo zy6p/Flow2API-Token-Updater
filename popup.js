@@ -88,9 +88,9 @@ function showStatusForCurrentState() {
     } else if (state.lastSync?.status === 'waiting_session' || state.hasConnection) {
         showStatus(state.lastSync?.message || '全局控制面已配置，等你在当前 store 登录 Labs。', 'info');
     } else if (state.baseUrl && !state.hasAdminToken) {
-        showStatus('还差一个 Flow2API Admin Token，填好后扩展才能全局管理自动刷新。', 'info');
+        showStatus('还差一个 Flow2API 插件访问令牌。推荐直接填系统 API Key，这样自动刷新可以长期稳定运行。', 'info');
     } else if (state.baseUrl) {
-        showStatus('补上 Admin Token 后，就可以让扩展接管自动同步。', 'info');
+        showStatus('补上长期插件访问令牌后，扩展就可以接管自动同步。', 'info');
     } else {
         hideStatusSoon();
     }
@@ -112,8 +112,8 @@ function render(allowPrefill = false) {
         ? '已保存，留空表示保持不变'
         : '输入后只保存，不会回显';
     document.getElementById('adminTokenHint').textContent = state.hasAdminToken
-        ? '已保存全局 Admin Token。留空不会覆盖；重新输入则会更新。'
-        : '填一次即可。后续连接 token 会由扩展自动通过 API 获取和刷新。';
+        ? '已保存全局插件访问令牌。留空不会覆盖；重新输入则会更新。推荐使用长期 API Key。'
+        : '推荐填写系统配置里的 API Key。后续连接 token 会由扩展自动通过 API 获取和刷新。';
 
     renderPreferences();
     renderSummary();
@@ -217,8 +217,8 @@ function getUiModel() {
         return {
             title: hasBaseUrl ? '补上权限就能接管' : '先配置全局控制面',
             text: hasBaseUrl
-                ? '现在还差 Flow2API Admin Token。保存后扩展会直接通过 API 管理连接和自动刷新，不再依赖控制台页。'
-                : '先告诉扩展你的 Flow2API 站点和 Admin Token，后续自动同步就不需要你反复操作。',
+                ? '现在还差 Flow2API 插件访问令牌。推荐填系统 API Key。保存后扩展会直接通过 API 管理连接和自动刷新，不再依赖控制台页。'
+                : '先告诉扩展你的 Flow2API 站点和长期插件访问令牌，后续自动同步就不需要你反复操作。',
             actionLabel: '保存全局配置',
             actionNote: '第一次只做一件事：把这个浏览器实例接到你的 Flow2API 控制面。'
         };
@@ -316,7 +316,7 @@ async function connectFlow2Api() {
             render();
 
             if (response?.needsLogin) {
-                showStatus(response.message || '请检查 Flow2API Admin Token 是否有效', 'info');
+                showStatus(response.message || '请检查 Flow2API 插件访问令牌是否有效', 'info');
                 return;
             }
 
@@ -380,7 +380,7 @@ async function syncCurrentProfile() {
             }
 
             if (response?.needsLogin) {
-                showStatus(response.message || '请检查 Flow2API Admin Token 是否有效', 'info');
+                showStatus(response.message || '请检查 Flow2API 插件访问令牌是否有效', 'info');
                 return;
             }
 
@@ -600,7 +600,7 @@ function collectAdminToken(allowKeepExisting = false) {
         return '';
     }
 
-    throw new Error('请填写 Flow2API Admin Token');
+    throw new Error('请填写 Flow2API 插件访问令牌');
 }
 
 function normalizeBaseUrl(raw) {
@@ -795,7 +795,7 @@ function buildSummaryMessage({
     nextScheduledReason
 }) {
     if (!hasConnection) {
-        return '先把 Flow2API 站点和 Admin Token 配好，后续自动同步才会真正接管。';
+        return '先把 Flow2API 站点和长期插件访问令牌配好，后续自动同步才会真正接管。';
     }
 
     if (storePolicy === 'disabled') {

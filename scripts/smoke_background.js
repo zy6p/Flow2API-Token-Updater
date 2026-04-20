@@ -12,7 +12,7 @@ const {
 
 function buildGlobalConfig({
     baseUrl = FLOW2API_ORIGIN,
-    adminToken = 'admin-token',
+    adminToken = 'plugin-api-key',
     connectionToken = 'connection-token',
     storePolicyByStore = {}
 } = {}) {
@@ -30,7 +30,7 @@ async function testGlobalConfigConnectsWithoutOpeningConsole() {
     const harness = createHarness();
     const background = loadBackground(harness);
 
-    const result = await background.connectBaseUrl(FLOW2API_ORIGIN, 'admin-token');
+    const result = await background.connectBaseUrl(FLOW2API_ORIGIN, 'plugin-api-key');
 
     assert.equal(result.success, true);
     assert.equal(result.hasConnection, true);
@@ -40,7 +40,7 @@ async function testGlobalConfigConnectsWithoutOpeningConsole() {
 
     const stored = harness.localStorageArea.dump();
     assert.equal(stored.globalFlow2ApiConfig.baseUrl, FLOW2API_ORIGIN);
-    assert.equal(stored.globalFlow2ApiConfig.adminToken, 'admin-token');
+    assert.equal(stored.globalFlow2ApiConfig.adminToken, 'plugin-api-key');
     assert.equal(stored.globalFlow2ApiConfig.connectionToken, 'connection-token');
     assert.equal(stored.lastSyncByStore.__default__.status, 'waiting_session');
     assert.equal(
@@ -73,7 +73,7 @@ async function testSyncUsesGlobalConfigAcrossStores() {
             }
         ],
         fetchHandler({ requestUrl, method, authHeader, body, createMockResponse }) {
-            if (requestUrl.pathname === '/api/tokens/st2at' && method === 'POST' && authHeader === 'Bearer admin-token') {
+            if (requestUrl.pathname === '/api/tokens/st2at' && method === 'POST' && authHeader === 'Bearer plugin-api-key') {
                 return createMockResponse(200, {
                     success: true,
                     email: `${body.st}@example.com`,
@@ -116,7 +116,7 @@ async function testSyncUsesGlobalConfigAcrossStores() {
     );
 }
 
-async function testPreviewUsesAdminTokenWithoutConsoleProbe() {
+async function testPreviewUsesPluginAccessTokenWithoutConsoleProbe() {
     const harness = createHarness({
         cookies: [{
             name: SESSION_COOKIE_NAME,
@@ -147,7 +147,7 @@ async function testPreviewUsesAdminTokenWithoutConsoleProbe() {
     );
 }
 
-async function testConnectionTokenRecoveryUsesAdminTokenInsteadOfConsole() {
+async function testConnectionTokenRecoveryUsesPluginAccessTokenInsteadOfConsole() {
     const harness = createHarness({
         cookies: [{
             name: SESSION_COOKIE_NAME,
@@ -175,7 +175,7 @@ async function testConnectionTokenRecoveryUsesAdminTokenInsteadOfConsole() {
                 }
             }
 
-            if (requestUrl.pathname === '/api/plugin/config' && method === 'GET' && authHeader === 'Bearer admin-token') {
+            if (requestUrl.pathname === '/api/plugin/config' && method === 'GET' && authHeader === 'Bearer plugin-api-key') {
                 return createMockResponse(200, {
                     config: {
                         connection_token: 'refreshed-connection-token'
@@ -416,8 +416,8 @@ async function main() {
     const tests = [
         testGlobalConfigConnectsWithoutOpeningConsole,
         testSyncUsesGlobalConfigAcrossStores,
-        testPreviewUsesAdminTokenWithoutConsoleProbe,
-        testConnectionTokenRecoveryUsesAdminTokenInsteadOfConsole,
+        testPreviewUsesPluginAccessTokenWithoutConsoleProbe,
+        testConnectionTokenRecoveryUsesPluginAccessTokenInsteadOfConsole,
         testGenericSyncErrorSchedulesQuickRetry,
         testMetadataUnknownSchedulesHourlyProbe,
         testObserveStoreDoesNotJoinAutomaticScheduling,

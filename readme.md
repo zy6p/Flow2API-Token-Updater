@@ -6,7 +6,7 @@
 - Firefox 系列：Firefox、Zen Browser
 - 当前测试阶段默认只发布自签名 XPI 和 banana 下载页；官方 AMO listed 渠道默认停发，避免误上架测试版本
 - 当前版本以浏览器 profile 为运行边界；扩展不会跨真实 profile 读取 Cookie 或共用运行状态
-- 在 Firefox / Zen 里，同一 profile 下不同 cookie store / container 会分别维护自己的 Labs 会话上下文和最近同步结果；Flow2API 站点地址与 Admin Token 在同一浏览器实例里统一配置
+- 在 Firefox / Zen 里，同一 profile 下不同 cookie store / container 会分别维护自己的 Labs 会话上下文和最近同步结果；Flow2API 站点地址与插件访问令牌在同一浏览器实例里统一配置
 - 当前版本使用“全局 Flow2API 配置 + 各 store 独立 Labs session”模型；自动同步不再依赖后台打开 Flow2API 控制台页面
 - 扩展会监听当前 profile 的 Google Labs 登录态变化，并自动同步到 Flow2API
 - 扩展会记住这个 profile 上一次成功同步所用的 Labs 会话上下文，后续后台刷新会优先回到同一组 store / container
@@ -14,7 +14,7 @@
 
 > 注意：浏览器 **profile 之间是完全隔离** 的。  
 > 当前页面所在的 profile / container 只会同步自己的 Google Labs 登录态。  
-> Flow2API 的 `Base URL` 和 `Admin Token` 在同一浏览器实例内统一配置，不需要每个 store / container 都重新配置 Flow2API。
+> Flow2API 的 `Base URL` 和插件访问令牌在同一浏览器实例内统一配置，不需要每个 store / container 都重新配置 Flow2API。
 > 在 Firefox / Zen 里，不同 container / cookie store 仍会分别维护自己的最近同步结果和 Labs 会话上下文。  
 > 同一个 Google 账号如果同时登录在多个 profile，建议只选择一个 profile 开启定时同步。
 
@@ -73,17 +73,18 @@
 1.  **填写连接信息**
     第一次点击插件图标时，为当前浏览器填写一次：
     - **Flow2API Base URL**
-    - **Flow2API Admin Token**
+    - **Flow2API 插件访问令牌**
 
     例如：
     `https://your-flow2api.example.com`
 
-    Admin Token 只用来让扩展通过 API 管理插件连接配置和账号元信息；真正按 profile / container 隔离的仍然是 Google Labs 登录态、最近同步结果和会话上下文。
+    推荐直接填写 Flow2API 系统配置里的 `API Key`，它是长期有效的；旧版 `admin-...` 登录态也兼容，但会随后台登录会话一起失效。
+    这个访问令牌只用来让扩展通过 API 管理插件连接配置和账号元信息；真正按 profile / container 隔离的仍然是 Google Labs 登录态、最近同步结果和会话上下文。
     ![配置界面](image-2.png)
 
 2.  **首次连接**
     点击 `保存并接管同步`。
-    - 扩展会先保存全局 `Base URL + Admin Token`。
+    - 扩展会先保存全局 `Base URL + 插件访问令牌`。
     - 然后会直接通过 Flow2API API 获取或刷新插件连接 Token，不再依赖后台打开控制台页。
     - 如果当前 profile 已经具备 Google Labs 登录态，但你没开 Labs 页面：扩展会后台静默打开一次 Labs flow 页面完成会话发现，然后自动关闭。
 
@@ -91,7 +92,7 @@
     连接成功后，扩展会监听 `labs.google` 的 session cookie 变化自动同步，并保留浏览器启动检查与后台兜底检查；必要时会静默唤醒一个 Labs 页面来刷新当前 profile 当前容器 / store 的会话识别。
     popup 里现在可以给当前 store 选三种管理模式：`主动管理`、`轻量跟随`、`停用`。只有 `主动管理` 的 store 会参与后台定时检查和静默唤醒；`轻量跟随` 只会在你自己登录、切换账号或 Cookie 变化时顺手同步；`停用` 则完全不参与后台自动逻辑。
     扩展的调度不再使用浏览器 Cookie 标注的过期时间来决定刷新时机，因为这个值在 Labs 上并不可靠。现在会优先使用 Flow2API 返回的账号过期时间提前刷新；如果暂时拿不到账号过期时间，后台会按更积极的探测策略继续补齐元数据，然后才退回 popup 里可配置的“后台保底刷新”间隔。对于看起来还很新、但实际上已经过期的旧 Labs Cookie，扩展会先尝试向 Flow2API 验证可用性；验证失败的旧 Cookie 会被忽略，不会再覆盖已有 token。
-    如果只是 Labs session 过期、但浏览器登录仍有效，扩展会优先后台自动恢复；如果 Flow2API 插件连接 Token 失效但 Admin Token 仍有效，扩展也会直接通过 API 重取连接配置再重试。如果恢复失败，会按失败次数逐步退避重试，不再高频打扰所有 store；通知里也会带上最近识别到的账号与 Flow2API 站点，方便你判断是哪个 profile。
+    如果只是 Labs session 过期、但浏览器登录仍有效，扩展会优先后台自动恢复；如果 Flow2API 插件连接 Token 失效但插件访问令牌仍有效，扩展也会直接通过 API 重取连接配置再重试。如果恢复失败，会按失败次数逐步退避重试，不再高频打扰所有 store；通知里也会带上最近识别到的账号与 Flow2API 站点，方便你判断是哪个 profile。
     打开 popup 默认只读取当前 profile 已缓存的状态，不会因为你只是看一眼就主动打开 Flow2API / Labs 页面；如果你想立即重新探测当前账号或连接状态，用 popup 里的 `刷新当前状态`。popup 还会直接显示当前 store 的 `下次检查` 和触发策略，方便判断后台自动刷新有没有真正排上。
 
 4.  **获取配置信息**
@@ -124,7 +125,7 @@
 
 1.  只在真正持有 Google Labs 登录态的 profile 里安装和配置扩展。
 2.  Flow2API 一般只要先接入一次。
-    配好 `Base URL` 和 `Admin Token` 后，这个浏览器实例里的其他 container / store 都会共用同一套 Flow2API 控制面；真正按 profile / container 隔离的是 Google Labs 登录态、最近同步结果和会话上下文。
+    配好 `Base URL` 和插件访问令牌后，这个浏览器实例里的其他 container / store 都会共用同一套 Flow2API 控制面；真正按 profile / container 隔离的是 Google Labs 登录态、最近同步结果和会话上下文。
 3.  如果同一个 Google 账号同时登录在多个 profile，只选一个 profile 启用定时同步。
 4.  其余 profile 可以不装扩展，或者装了但不保存配置。
 5.  不要让多个 profile 长期对同一套 Flow2API 账号池反复覆盖同一个 Google 账号，否则通常是谁最后同步谁覆盖。
@@ -132,11 +133,11 @@
 ## 五、 隐私与存储说明
 
 - 扩展会读取 `labs.google` 的登录 Cookie，并提取 `__Secure-next-auth.session-token`
-- 当用户填写 `Base URL` 和 `Admin Token` 后，扩展会通过 Flow2API API 自动获取或刷新插件连接 Token
+- 当用户填写 `Base URL` 和插件访问令牌后，扩展会通过 Flow2API API 自动获取或刷新插件连接 Token
 - 当浏览器里存在现有登录态但页面未打开时，扩展可能会后台静默打开 `labs.google` 的 flow 页面，以发现当前 profile 可用的会话，然后自动关闭临时标签页
 - 提取到的登录态只会发送到用户自己填写的 `Base URL` 对应的 Flow2API 接口
 - 当前 profile 的同步状态和运行日志仅保存在当前浏览器 profile 本地；在 Firefox / Zen 里，最近一次同步结果和 Labs 会话上下文还会按 cookie store / container 分开保存
-- `Base URL`、`Admin Token`、插件连接 Token 缓存、最近一次同步结果和日志都只保存在当前浏览器本地；其中 Flow2API 全局配置可以在同一浏览器实例内复用，但不会同步到别的浏览器安装
+- `Base URL`、插件访问令牌、插件连接 Token 缓存、最近一次同步结果和日志都只保存在当前浏览器本地；其中 Flow2API 全局配置可以在同一浏览器实例内复用，但不会同步到别的浏览器安装
 - 更多说明见 [privacy.html](privacy.html)
 
 ## 六、 上架前建议

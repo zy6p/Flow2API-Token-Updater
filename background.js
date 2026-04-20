@@ -369,7 +369,7 @@ async function connectBaseUrl(rawBaseUrl, rawAdminToken = '', cookieStoreId = nu
         : (existingGlobalConfig.baseUrl === normalized.origin ? existingGlobalConfig.adminToken : '');
 
     if (!adminToken) {
-        throw new Error('请填写 Flow2API Admin Token');
+        throw new Error('请填写 Flow2API 插件访问令牌');
     }
 
     const permissionGranted = await hasOriginPermission(normalized.origin);
@@ -600,8 +600,8 @@ async function performSync({
         return {
             success: false,
             error: effectiveAdminToken
-                ? '无法为当前 Flow2API 站点建立插件连接，请检查 Admin Token 是否有效'
-                : '请先填写 Flow2API Admin Token'
+                ? getInvalidPluginAccessTokenMessage(effectiveAdminToken)
+                : '请先填写 Flow2API 插件访问令牌'
         };
     }
 
@@ -913,7 +913,7 @@ async function ensurePluginConfig(baseUrl, adminToken) {
     });
 
     if (configResponse.response.status === 401) {
-        throw new Error('Flow2API 控制台登录已过期，请重新登录');
+        throw new Error(getInvalidPluginAccessTokenMessage(adminToken));
     }
 
     if (!configResponse.response.ok) {
@@ -953,7 +953,7 @@ async function ensureConnectionTokenCache(baseUrl, adminToken, {
     const normalizedBaseUrl = normalizeBaseUrl(baseUrl).origin;
     const normalizedAdminToken = typeof adminToken === 'string' ? adminToken.trim() : '';
     if (!normalizedAdminToken) {
-        throw new Error('请先填写 Flow2API Admin Token');
+        throw new Error('请先填写 Flow2API 插件访问令牌');
     }
 
     const existingGlobalConfig = await loadGlobalConfig();
@@ -3292,7 +3292,7 @@ async function pushSessionTokenWithRecovery({
             throw error;
         }
 
-        await Logger.info('Flow2API connection token rejected, retrying admin-token refresh', {
+        await Logger.info('Flow2API connection token rejected, retrying plugin credential refresh', {
             baseUrl,
             status: error.httpStatus || null
         });
@@ -3701,6 +3701,18 @@ function resolveLegacySecret(account, localSecrets) {
     }
 
     return '';
+}
+
+function isLegacyFlow2ApiAdminSessionToken(rawValue) {
+    return typeof rawValue === 'string' && rawValue.trim().startsWith('admin-');
+}
+
+function getInvalidPluginAccessTokenMessage(rawValue) {
+    if (isLegacyFlow2ApiAdminSessionToken(rawValue)) {
+        return 'Flow2API Admin 登录态已过期，请重新登录，或改填系统 API Key 作为长期插件访问令牌';
+    }
+
+    return 'Flow2API 插件访问令牌无效，请检查系统 API Key 或长期插件令牌';
 }
 
 function normalizeBaseUrl(rawValue) {

@@ -374,7 +374,7 @@
             </div>
             <h1 id="heroTitle">先配置全局控制面</h1>
             <p class="subtitle" id="heroText">
-                只配置一次 Flow2API 站点和 Admin Token，后续各 store 的 Labs session 会由扩展自动管理。
+                只配置一次 Flow2API 站点和插件访问令牌，后续各 store 的 Labs session 会由扩展自动管理。
             </p>
         </div>
 
@@ -391,7 +391,7 @@
             </div>
 
             <div class="setting-stack">
-                <label for="adminToken">Flow2API Admin Token</label>
+                <label for="adminToken">Flow2API 插件访问令牌</label>
                 <input
                     type="password"
                     id="adminToken"
@@ -399,7 +399,7 @@
                     autocomplete="off"
                     spellcheck="false">
                 <div class="hint" id="adminTokenHint">
-                    填一次即可。后续连接 token 会由扩展自动通过 API 获取和刷新。
+                    推荐填写系统配置里的 API Key，长期有效；也兼容旧版 <code>admin-...</code> 登录态。
                 </div>
             </div>
 

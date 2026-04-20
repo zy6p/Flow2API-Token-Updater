@@ -301,7 +301,7 @@ function createHarness({
         }
 
         if (requestUrl.pathname === '/api/plugin/config' && method === 'GET') {
-            assert.equal(authHeader, 'Bearer admin-token', 'config GET should use admin token');
+            assert.equal(authHeader, 'Bearer plugin-api-key', 'config GET should use plugin access token');
             return createMockResponse(200, {
                 config: {
                     connection_token: 'connection-token'
@@ -310,14 +310,14 @@ function createHarness({
         }
 
         if (requestUrl.pathname === '/api/plugin/config' && method === 'POST') {
-            assert.equal(authHeader, 'Bearer admin-token', 'config POST should use admin token');
+            assert.equal(authHeader, 'Bearer plugin-api-key', 'config POST should use plugin access token');
             return createMockResponse(200, {
                 connection_token: 'connection-token'
             });
         }
 
         if (requestUrl.pathname === '/api/tokens/st2at' && method === 'POST') {
-            assert.equal(authHeader, 'Bearer admin-token', 'st2at should use admin token');
+            assert.equal(authHeader, 'Bearer plugin-api-key', 'st2at should use plugin access token');
             return createMockResponse(200, {
                 success: true,
                 email: 'user@example.com',
