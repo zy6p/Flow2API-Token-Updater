@@ -48,27 +48,59 @@ function loadPopupHelpers() {
     return context;
 }
 
-test('shouldPersistGlobalConfigBeforeSync persists a freshly entered connection token even when a saved token already exists', () => {
+test('shouldShowSetupPanel keeps setup visible until a saved login exists', () => {
     const popup = loadPopupHelpers();
 
     assert.equal(
-        popup.shouldPersistGlobalConfigBeforeSync({
-            currentBaseUrl: 'https://banana.hotdry.top',
-            requestedBaseUrl: 'https://banana.hotdry.top',
-            hasSavedConnectionToken: true,
-            connectionTokenOverride: '5MK8vfKldWqLSSwMvqhVK3LNbv8iLnKm'
+        popup.shouldShowSetupPanel({
+            hasConnectionToken: false,
+            showSetup: false
         }),
         true
     );
 
     assert.equal(
-        popup.shouldPersistGlobalConfigBeforeSync({
-            currentBaseUrl: 'https://banana.hotdry.top',
-            requestedBaseUrl: 'https://banana.hotdry.top',
-            hasSavedConnectionToken: true,
-            connectionTokenOverride: ''
+        popup.shouldShowSetupPanel({
+            hasConnectionToken: true,
+            showSetup: false
         }),
         false
+    );
+
+    assert.equal(
+        popup.shouldShowSetupPanel({
+            hasConnectionToken: true,
+            showSetup: true
+        }),
+        true
+    );
+});
+
+test('shouldAutoSyncOnOpen only runs when the popup is already connected', () => {
+    const popup = loadPopupHelpers();
+
+    assert.equal(
+        popup.shouldAutoSyncOnOpen({
+            hasConnectionToken: false,
+            baseUrl: 'https://banana.hotdry.top'
+        }),
+        false
+    );
+
+    assert.equal(
+        popup.shouldAutoSyncOnOpen({
+            hasConnectionToken: true,
+            baseUrl: ''
+        }),
+        false
+    );
+
+    assert.equal(
+        popup.shouldAutoSyncOnOpen({
+            hasConnectionToken: true,
+            baseUrl: 'https://banana.hotdry.top'
+        }),
+        true
     );
 });
 

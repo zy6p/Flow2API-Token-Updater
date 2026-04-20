@@ -174,6 +174,34 @@
             border-top: 1px solid rgba(16, 24, 40, 0.05);
         }
 
+        .setting-stack:first-of-type {
+            margin-top: 0;
+            padding-top: 0;
+            border-top: none;
+        }
+
+        .section-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+
+        .section-title {
+            margin: 0;
+            font-size: 14px;
+            font-weight: 760;
+            letter-spacing: -0.02em;
+        }
+
+        .section-copy {
+            margin: 8px 0 0;
+            font-size: 13px;
+            line-height: 1.55;
+            color: var(--muted);
+        }
+
         .actions {
             margin-top: 14px;
         }
@@ -214,6 +242,21 @@
             background: rgba(255, 255, 255, 0.7);
             border: 1px solid rgba(16, 24, 40, 0.06);
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
+        }
+
+        .tool-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 14px;
+        }
+
+        .tool-grid .btn-plain {
+            margin-top: 0;
+        }
+
+        .is-hidden {
+            display: none !important;
         }
 
         .action-note {
@@ -374,99 +417,19 @@
             </div>
             <h1 id="heroTitle">先配置全局控制面</h1>
             <p class="subtitle" id="heroText">
-                只配置一次 Flow2API 站点和后台账号，扩展就会自动换取插件连接令牌，后续各 store 的 Labs session 会由扩展自动管理。
+                第一次登录 Flow2API 后，后面就只剩同步。打开弹窗会自动检查当前 store，并把这次 Labs 登录态推到 Flow2API。
             </p>
         </div>
 
-        <div class="card input-card">
-            <label for="baseUrl">Flow2API 站点</label>
-            <input
-                type="text"
-                id="baseUrl"
-                placeholder="https://flow2api.example.com"
-                autocomplete="off"
-                spellcheck="false">
-            <div class="hint">
-                只填站点地址，例如 <code>https://flow2api.example.com</code>。自动同步不再依赖后台打开控制台页面。
+        <div class="actions">
+            <button class="btn-primary" id="connectBtn">登录并接管同步</button>
+            <div class="action-note" id="actionNote">
+                第一次登录完成后，设置会自动折叠；以后点开弹窗就会同步当前 store。
             </div>
-
-            <div class="setting-stack">
-                <label for="bootstrapUsername">Flow2API 后台账号</label>
-                <input
-                    type="text"
-                    id="bootstrapUsername"
-                    placeholder="默认 admin"
-                    autocomplete="username"
-                    spellcheck="false">
-                <div class="hint">
-                    这里只在首次接入或你主动换取新 <code>connection_token</code> 时使用。默认用户名通常是 <code>admin</code>。
-                </div>
-            </div>
-
-            <div class="setting-stack">
-                <label for="bootstrapPassword">Flow2API 后台密码</label>
-                <input
-                    type="password"
-                    id="bootstrapPassword"
-                    placeholder="只在换取 connection_token 时使用"
-                    autocomplete="current-password"
-                    spellcheck="false">
-                <div class="hint">
-                    密码默认不会被扩展保存。扩展只会拿它临时登录后台、读出 <code>connection_token</code>，然后立刻丢掉后台 session。
-                </div>
-            </div>
-
-            <div class="setting-stack">
-                <label for="connectionToken">高级：手动填写 connection_token</label>
-                <input
-                    type="password"
-                    id="connectionToken"
-                    placeholder="已在控制台复制时再填"
-                    autocomplete="off"
-                    spellcheck="false">
-                <div class="hint" id="connectionTokenHint">
-                    这是插件长期使用的低权限令牌。正常情况下你只填上面的后台账号密码即可；这里只有在你想手动覆盖时才需要。
-                </div>
-            </div>
-
-            <div class="setting-stack">
-                <label for="periodicSyncMinutes">后台保底刷新</label>
-                <select id="periodicSyncMinutes">
-                    <option value="60">每 1 小时</option>
-                    <option value="120">每 2 小时</option>
-                    <option value="240">每 4 小时</option>
-                    <option value="480">每 8 小时</option>
-                    <option value="720">每 12 小时</option>
-                </select>
-                <div class="hint" id="intervalHint">
-                    就算没有明显变化，扩展也会按这个间隔自动重刷一次。
-                </div>
-            </div>
-
-            <div class="setting-stack">
-                <label for="storePolicy">当前 store 管理模式</label>
-                <select id="storePolicy">
-                    <option value="auto">主动管理</option>
-                    <option value="observe">轻量跟随</option>
-                    <option value="disabled">停用</option>
-                </select>
-                <div class="hint" id="storePolicyHint">
-                    主动管理：这个 store 会参与定时检查，也允许后台唤醒 Labs 页来自动恢复会话。
-                </div>
-            </div>
+            <button class="btn-plain is-hidden" id="settingsToggleBtn">修改设置</button>
         </div>
 
         <div class="status" id="status"></div>
-
-        <div class="actions">
-            <button class="btn-primary" id="connectBtn">保存并接管同步</button>
-            <div class="action-note" id="actionNote">
-                先保存全局控制配置，再由扩展接管当前 store 的同步和后续自动刷新。
-            </div>
-            <button class="btn-plain" id="refreshStatusBtn">刷新当前状态</button>
-            <button class="btn-plain" id="consoleBtn">打开 Flow2API 控制台</button>
-            <button class="btn-plain" id="logsBtn">查看诊断日志</button>
-        </div>
 
         <div class="card snapshot">
             <div class="snapshot-head">
@@ -499,6 +462,88 @@
 
             <div class="browser-hint" id="browserHint">
                 每个真实浏览器 Profile 仍然彼此隔离；当前扩展实例只会管理这个浏览器 Profile 里的 store 和 Labs session。
+            </div>
+        </div>
+
+        <div class="card input-card" id="configCard">
+            <div class="section-head">
+                <div>
+                    <p class="section-title">Flow2API 登录</p>
+                    <p class="section-copy">
+                        这里只做一件事：登录一次 Flow2API。登录完成后，扩展会自己保留长期运行所需的内部凭证，你不用再管。
+                    </p>
+                </div>
+            </div>
+
+            <div class="setting-stack">
+                <label for="baseUrl">Flow2API 站点</label>
+                <input
+                    type="text"
+                    id="baseUrl"
+                    placeholder="https://flow2api.example.com"
+                    autocomplete="off"
+                    spellcheck="false">
+                <div class="hint">
+                    只填站点地址，例如 <code>https://flow2api.example.com</code>。
+                </div>
+            </div>
+
+            <div class="setting-stack">
+                <label for="bootstrapUsername">用户名</label>
+                <input
+                    type="text"
+                    id="bootstrapUsername"
+                    placeholder="默认 admin"
+                    autocomplete="username"
+                    spellcheck="false">
+                <div class="hint">
+                    第一次接入或你主动重新登录时才需要。默认用户名通常是 <code>admin</code>。
+                </div>
+            </div>
+
+            <div class="setting-stack">
+                <label for="bootstrapPassword">密码</label>
+                <input
+                    type="password"
+                    id="bootstrapPassword"
+                    placeholder="第一次登录或重新登录时填写"
+                    autocomplete="current-password"
+                    spellcheck="false">
+                <div class="hint">
+                    密码不会被扩展长期保存。登录完成后，设置会自动折叠，后面你只需要点开弹窗同步。
+                </div>
+            </div>
+
+            <div class="setting-stack">
+                <label for="periodicSyncMinutes">后台保底刷新</label>
+                <select id="periodicSyncMinutes">
+                    <option value="60">每 1 小时</option>
+                    <option value="120">每 2 小时</option>
+                    <option value="240">每 4 小时</option>
+                    <option value="480">每 8 小时</option>
+                    <option value="720">每 12 小时</option>
+                </select>
+                <div class="hint" id="intervalHint">
+                    就算没有明显变化，扩展也会按这个间隔自动重刷一次。
+                </div>
+            </div>
+
+            <div class="setting-stack">
+                <label for="storePolicy">当前 store 管理模式</label>
+                <select id="storePolicy">
+                    <option value="auto">主动管理</option>
+                    <option value="observe">轻量跟随</option>
+                    <option value="disabled">停用</option>
+                </select>
+                <div class="hint" id="storePolicyHint">
+                    主动管理：这个 store 会参与定时检查，也允许后台唤醒 Labs 页来自动恢复会话。
+                </div>
+            </div>
+
+            <div class="tool-grid">
+                <button class="btn-plain" id="refreshStatusBtn">重新读取状态</button>
+                <button class="btn-plain" id="consoleBtn">打开控制台</button>
+                <button class="btn-plain" id="logsBtn">查看日志</button>
             </div>
         </div>
     </div>
