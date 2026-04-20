@@ -374,7 +374,7 @@
             </div>
             <h1 id="heroTitle">先配置全局控制面</h1>
             <p class="subtitle" id="heroText">
-                只配置一次 Flow2API 站点和插件访问令牌，后续各 store 的 Labs session 会由扩展自动管理。
+                只配置一次 Flow2API 站点和插件连接令牌，后续各 store 的 Labs session 会由扩展自动管理。
             </p>
         </div>
 
@@ -391,15 +391,39 @@
             </div>
 
             <div class="setting-stack">
-                <label for="adminToken">Flow2API 插件访问令牌</label>
+                <label for="connectionToken">Flow2API 插件连接令牌</label>
                 <input
                     type="password"
-                    id="adminToken"
+                    id="connectionToken"
                     placeholder="输入后只保存，不会回显"
                     autocomplete="off"
                     spellcheck="false">
-                <div class="hint" id="adminTokenHint">
-                    推荐填写系统配置里的 API Key，长期有效；也兼容旧版 <code>admin-...</code> 登录态。
+                <div class="hint" id="connectionTokenHint">
+                    推荐直接填写控制台里的 <code>connection_token</code>。这是插件长期使用的低权限令牌，不是 API Key，也不是后台登录 session。
+                </div>
+            </div>
+
+            <div class="setting-stack">
+                <label for="bootstrapUsername">可选：用后台账号换取连接令牌</label>
+                <input
+                    type="text"
+                    id="bootstrapUsername"
+                    placeholder="管理员用户名，默认 admin"
+                    autocomplete="username"
+                    spellcheck="false">
+                <div class="hint">
+                    只在你懒得手动复制 <code>connection_token</code> 时使用。扩展会临时登录后台，读出连接令牌后立刻丢掉后台 session。
+                </div>
+                <input
+                    type="password"
+                    id="bootstrapPassword"
+                    placeholder="后台密码，只用于这一次换取 connection_token"
+                    autocomplete="current-password"
+                    spellcheck="false"
+                    style="margin-top: 10px;">
+                <button class="btn-plain" id="bootstrapTokenBtn" style="margin-top: 10px;">用后台账号获取连接令牌</button>
+                <div class="hint">
+                    密码默认不会被扩展保存。日常自动刷新只使用 <code>connection_token</code>。
                 </div>
             </div>
 

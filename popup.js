@@ -6,7 +6,7 @@ const state = {
     lastSync: null,
     browserInfo: null,
     hasConnection: false,
-    hasAdminToken: false,
+    hasConnectionToken: false,
     hasCachedConnectionToken: false,
     configSource: 'none',
     periodicSyncMinutes: 240,
@@ -25,6 +25,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 function bindEvents() {
     document.getElementById('connectBtn').addEventListener('click', runPrimaryAction);
+    document.getElementById('bootstrapTokenBtn').addEventListener('click', bootstrapConnectionTokenFromLogin);
     document.getElementById('periodicSyncMinutes').addEventListener('change', updateSyncPreferences);
     document.getElementById('storePolicy').addEventListener('change', updateStorePolicy);
     document.getElementById('refreshStatusBtn').addEventListener('click', refreshStatus);
@@ -64,7 +65,7 @@ function applySetupResponse(response) {
     state.browserInfo = response.browserInfo || null;
     state.suggestedBaseUrl = response.suggestedBaseUrl || '';
     state.hasConnection = Boolean(response.hasConnection);
-    state.hasAdminToken = Boolean(response.hasAdminToken);
+    state.hasConnectionToken = Boolean(response.hasConnectionToken);
     state.hasCachedConnectionToken = Boolean(response.hasCachedConnectionToken);
     state.configSource = response.settings?.configSource || 'none';
     state.periodicSyncMinutes = normalizePeriodicSyncMinutes(response.settings?.periodicSyncMinutes);
@@ -87,10 +88,10 @@ function showStatusForCurrentState() {
         showStatus(state.lastSync.message || '这次同步没有完成。', 'error');
     } else if (state.lastSync?.status === 'waiting_session' || state.hasConnection) {
         showStatus(state.lastSync?.message || '全局控制面已配置，等你在当前 store 登录 Labs。', 'info');
-    } else if (state.baseUrl && !state.hasAdminToken) {
-        showStatus('还差一个 Flow2API 插件访问令牌。推荐直接填系统 API Key，这样自动刷新可以长期稳定运行。', 'info');
+    } else if (state.baseUrl && !state.hasConnectionToken) {
+        showStatus('还差一个 Flow2API 插件连接令牌。你可以直接粘贴 connection_token，或者用后台账号临时换取一次。', 'info');
     } else if (state.baseUrl) {
-        showStatus('补上长期插件访问令牌后，扩展就可以接管自动同步。', 'info');
+        showStatus('补上插件连接令牌后，扩展就可以接管自动同步。', 'info');
     } else {
         hideStatusSoon();
     }
@@ -104,16 +105,16 @@ function render(allowPrefill = false) {
         input.value = nextValue;
     }
 
-    const adminTokenInput = document.getElementById('adminToken');
-    if (!document.activeElement || document.activeElement !== adminTokenInput) {
-        adminTokenInput.value = '';
+    const connectionTokenInput = document.getElementById('connectionToken');
+    if (!document.activeElement || document.activeElement !== connectionTokenInput) {
+        connectionTokenInput.value = '';
     }
-    adminTokenInput.placeholder = state.hasAdminToken
+    connectionTokenInput.placeholder = state.hasConnectionToken
         ? '已保存，留空表示保持不变'
         : '输入后只保存，不会回显';
-    document.getElementById('adminTokenHint').textContent = state.hasAdminToken
-        ? '已保存全局插件访问令牌。留空不会覆盖；重新输入则会更新。推荐使用长期 API Key。'
-        : '推荐填写系统配置里的 API Key。后续连接 token 会由扩展自动通过 API 获取和刷新。';
+    document.getElementById('connectionTokenHint').textContent = state.hasConnectionToken
+        ? '已保存全局 connection_token。留空不会覆盖；重新输入则会更新。'
+        : '推荐直接填写控制台里的 connection_token。也可以在下面临时输入后台账号密码，让扩展帮你换取一次。';
 
     renderPreferences();
     renderSummary();
@@ -150,7 +151,7 @@ function renderSummary() {
 
     const hasBaseUrl = Boolean(state.baseUrl);
     const hasConnection = Boolean(state.hasConnection);
-    const globallyReady = Boolean(state.baseUrl && state.hasAdminToken);
+    const globallyReady = Boolean(state.baseUrl && state.hasConnectionToken);
     const lastSync = state.lastSync;
 
     let stateLabel = '未接入';
@@ -208,7 +209,7 @@ function renderExperience() {
 
 function getUiModel() {
     const hasBaseUrl = Boolean(state.baseUrl || state.suggestedBaseUrl);
-    const globallyReady = Boolean(state.baseUrl && state.hasAdminToken);
+    const globallyReady = Boolean(state.baseUrl && state.hasConnectionToken);
     const lastSync = state.lastSync;
     const periodicLabel = formatMinutesLabel(state.periodicSyncMinutes);
     const storeMode = normalizeStorePolicy(state.storePolicy);
@@ -217,8 +218,8 @@ function getUiModel() {
         return {
             title: hasBaseUrl ? '补上权限就能接管' : '先配置全局控制面',
             text: hasBaseUrl
-                ? '现在还差 Flow2API 插件访问令牌。推荐填系统 API Key。保存后扩展会直接通过 API 管理连接和自动刷新，不再依赖控制台页。'
-                : '先告诉扩展你的 Flow2API 站点和长期插件访问令牌，后续自动同步就不需要你反复操作。',
+                ? '现在还差 Flow2API 插件连接令牌。你可以直接粘贴控制台里的 connection_token，也可以用后台账号临时换取一次。'
+                : '先告诉扩展你的 Flow2API 站点和插件 connection_token，后续自动同步就不需要你反复操作。',
             actionLabel: '保存全局配置',
             actionNote: '第一次只做一件事：把这个浏览器实例接到你的 Flow2API 控制面。'
         };
@@ -280,7 +281,7 @@ function getUiModel() {
 }
 
 async function runPrimaryAction() {
-    if (state.hasAdminToken) {
+    if (state.hasConnectionToken) {
         return syncCurrentProfile();
     }
 
@@ -290,7 +291,7 @@ async function runPrimaryAction() {
 async function connectFlow2Api() {
     try {
         const baseUrl = collectBaseUrl();
-        const adminToken = collectAdminToken(true);
+        const connectionToken = collectConnectionToken(true);
         const originPattern = toOriginPattern(baseUrl);
         const cookieStoreId = await getCurrentCookieStoreId();
 
@@ -302,7 +303,7 @@ async function connectFlow2Api() {
         const response = await extensionApi.runtime.sendMessage({
             action: 'saveGlobalConfig',
             baseUrl,
-            adminToken,
+            connectionToken,
             cookieStoreId
         });
 
@@ -316,7 +317,7 @@ async function connectFlow2Api() {
             render();
 
             if (response?.needsLogin) {
-                showStatus(response.message || '请检查 Flow2API 插件访问令牌是否有效', 'info');
+                showStatus(response.message || '请检查 Flow2API 插件连接令牌是否有效', 'info');
                 return;
             }
 
@@ -326,7 +327,7 @@ async function connectFlow2Api() {
         state.baseUrl = normalizeBaseUrl(baseUrl);
         state.lastSync = response.lastSync || state.lastSync;
         state.hasConnection = true;
-        state.hasAdminToken = true;
+        state.hasConnectionToken = true;
         state.configSource = 'global';
         render();
 
@@ -351,7 +352,7 @@ async function syncCurrentProfile() {
         const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
         const originPattern = toOriginPattern(normalizedBaseUrl);
         const cookieStoreId = await getCurrentCookieStoreId();
-        const adminTokenOverride = collectAdminToken(true);
+        const connectionTokenOverride = collectConnectionToken(true);
 
         setBusy(true);
         showStatus('正在检查当前 store 的 Google Labs 登录态...', 'info');
@@ -363,13 +364,13 @@ async function syncCurrentProfile() {
         if (shouldPersistGlobalConfigBeforeSync({
             currentBaseUrl: state.baseUrl,
             requestedBaseUrl: normalizedBaseUrl,
-            hasSavedAdminToken: state.hasAdminToken,
-            adminTokenOverride
+            hasSavedConnectionToken: state.hasConnectionToken,
+            connectionTokenOverride
         })) {
             response = await extensionApi.runtime.sendMessage({
                 action: 'saveGlobalConfig',
                 baseUrl: normalizedBaseUrl,
-                adminToken: adminTokenOverride,
+                connectionToken: connectionTokenOverride,
                 cookieStoreId
             });
         } else {
@@ -386,7 +387,7 @@ async function syncCurrentProfile() {
             }
 
             if (response?.needsLogin) {
-                showStatus(response.message || '请检查 Flow2API 插件访问令牌是否有效', 'info');
+                showStatus(response.message || '请检查 Flow2API 插件连接令牌是否有效', 'info');
                 return;
             }
 
@@ -396,6 +397,7 @@ async function syncCurrentProfile() {
         state.baseUrl = normalizedBaseUrl;
         state.lastSync = response.lastSync || state.lastSync;
         state.hasConnection = Boolean(response.hasConnection || state.hasConnection);
+        state.hasConnectionToken = Boolean(response.hasConnectionToken || state.hasConnectionToken);
         render();
 
         const statusType = response.lastSync?.status === 'error'
@@ -416,10 +418,10 @@ async function syncCurrentProfile() {
 function shouldPersistGlobalConfigBeforeSync({
     currentBaseUrl = '',
     requestedBaseUrl = '',
-    hasSavedAdminToken = false,
-    adminTokenOverride = ''
+    hasSavedConnectionToken = false,
+    connectionTokenOverride = ''
 } = {}) {
-    if (typeof adminTokenOverride === 'string' && adminTokenOverride.trim()) {
+    if (typeof connectionTokenOverride === 'string' && connectionTokenOverride.trim()) {
         return true;
     }
 
@@ -427,7 +429,60 @@ function shouldPersistGlobalConfigBeforeSync({
         return true;
     }
 
-    return !hasSavedAdminToken;
+    return !hasSavedConnectionToken;
+}
+
+async function bootstrapConnectionTokenFromLogin() {
+    try {
+        const baseUrl = collectBaseUrl();
+        const originPattern = toOriginPattern(baseUrl);
+        const username = collectBootstrapUsername();
+        const password = collectBootstrapPassword();
+        const cookieStoreId = await getCurrentCookieStoreId();
+
+        setBusy(true);
+        showStatus('正在用 Flow2API 后台账号换取 connection_token...', 'info');
+
+        await ensureHostPermission(originPattern);
+
+        const response = await extensionApi.runtime.sendMessage({
+            action: 'bootstrapConnectionToken',
+            baseUrl,
+            username,
+            password,
+            cookieStoreId
+        });
+
+        if (!response?.success) {
+            if (response?.lastSync) {
+                state.lastSync = response.lastSync;
+                render();
+            }
+
+            throw new Error(response?.error || '换取 connection_token 失败');
+        }
+
+        document.getElementById('bootstrapPassword').value = '';
+        state.baseUrl = normalizeBaseUrl(baseUrl);
+        state.lastSync = response.lastSync || state.lastSync;
+        state.hasConnection = true;
+        state.hasConnectionToken = true;
+        state.configSource = 'global';
+        render();
+
+        const statusType = response.lastSync?.status === 'error'
+            ? 'error'
+            : (response.synced === false ? 'info' : 'success');
+
+        showStatus(
+            response.message || '已通过后台账号换取并保存 connection_token。',
+            statusType
+        );
+    } catch (error) {
+        showStatus(error.message, 'error');
+    } finally {
+        setBusy(false);
+    }
 }
 
 async function openConsole() {
@@ -613,17 +668,30 @@ function collectBaseUrl(allowEmpty = false) {
     return normalizeBaseUrl(raw);
 }
 
-function collectAdminToken(allowKeepExisting = false) {
-    const raw = document.getElementById('adminToken').value.trim();
+function collectConnectionToken(allowKeepExisting = false) {
+    const raw = document.getElementById('connectionToken').value.trim();
     if (raw) {
         return raw;
     }
 
-    if (allowKeepExisting && state.hasAdminToken) {
+    if (allowKeepExisting && state.hasConnectionToken) {
         return '';
     }
 
-    throw new Error('请填写 Flow2API 插件访问令牌');
+    throw new Error('请填写 Flow2API 插件连接令牌');
+}
+
+function collectBootstrapUsername() {
+    return document.getElementById('bootstrapUsername').value.trim() || 'admin';
+}
+
+function collectBootstrapPassword() {
+    const raw = document.getElementById('bootstrapPassword').value.trim();
+    if (!raw) {
+        throw new Error('请填写 Flow2API 后台密码');
+    }
+
+    return raw;
 }
 
 function normalizeBaseUrl(raw) {
@@ -656,7 +724,10 @@ function toOriginPattern(baseUrl) {
 
 function setBusy(isBusy) {
     document.getElementById('connectBtn').disabled = isBusy;
-    document.getElementById('adminToken').disabled = isBusy;
+    document.getElementById('connectionToken').disabled = isBusy;
+    document.getElementById('bootstrapUsername').disabled = isBusy;
+    document.getElementById('bootstrapPassword').disabled = isBusy;
+    document.getElementById('bootstrapTokenBtn').disabled = isBusy;
     document.getElementById('periodicSyncMinutes').disabled = isBusy;
     document.getElementById('storePolicy').disabled = isBusy;
     document.getElementById('refreshStatusBtn').disabled = isBusy;
@@ -818,7 +889,7 @@ function buildSummaryMessage({
     nextScheduledReason
 }) {
     if (!hasConnection) {
-        return '先把 Flow2API 站点和长期插件访问令牌配好，后续自动同步才会真正接管。';
+        return '先把 Flow2API 站点和插件 connection_token 配好，后续自动同步才会真正接管。';
     }
 
     if (storePolicy === 'disabled') {

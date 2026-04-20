@@ -198,7 +198,18 @@ async function handleMessage(request = {}, sender = {}) {
             });
         case 'saveGlobalConfig':
         case 'connectBaseUrl':
-            return connectBaseUrl(request.baseUrl, request.adminToken, cookieStoreId);
+            return connectBaseUrl(
+                request.baseUrl,
+                request.connectionToken ?? request.adminToken,
+                cookieStoreId
+            );
+        case 'bootstrapConnectionToken':
+            return bootstrapConnectionToken({
+                baseUrl: request.baseUrl,
+                username: request.username,
+                password: request.password,
+                cookieStoreId
+            });
         case 'syncNow':
             return syncCurrentSession({
                 reason: 'manual_sync',
@@ -244,47 +255,7 @@ async function getSetupData(cookieStoreId = null, {
 
     const settings = await loadSettings({ cookieStoreId });
     const suggestedBaseUrl = await getSuggestedBaseUrl(settings.baseUrl);
-
-    if (refreshConnection
-        && settings.baseUrl
-        && settings.adminToken
-        && await hasOriginPermission(settings.baseUrl)) {
-        try {
-            await ensureConnectionTokenCache(settings.baseUrl, settings.adminToken, {
-                forceRefresh: !settings.connectionToken
-            });
-        } catch (error) {
-            await Logger.info('Flow2API connection refresh skipped', {
-                baseUrl: settings.baseUrl,
-                reason: error.message
-            });
-        }
-    }
-
-    if (settings.baseUrl
-        && settings.adminToken
-        && !settings.connectionToken
-        && await hasOriginPermission(settings.baseUrl)) {
-        try {
-            await ensureConnectionTokenCache(settings.baseUrl, settings.adminToken, {
-                forceRefresh: false
-            });
-        } catch (error) {
-            await Logger.info('Flow2API connection cache still unavailable', {
-                baseUrl: settings.baseUrl,
-                reason: error.message
-            });
-        }
-    }
-
     const hydratedSettings = await loadSettings({ cookieStoreId });
-    if (!refreshConnection
-        && !settings.connectionToken
-        && hydratedSettings.connectionToken
-        && settings.baseUrl === hydratedSettings.baseUrl
-        && settings.adminToken === hydratedSettings.adminToken) {
-        settings.connectionToken = hydratedSettings.connectionToken;
-    }
 
     const syncPreferences = await loadSyncPreferences();
     const resolvedStoreKey = storeKeyFromCookieStoreId(
@@ -314,8 +285,8 @@ async function getSetupData(cookieStoreId = null, {
             syncPreferences,
             scheduledScope: scheduledScopeByStore[resolvedStoreKey] || null
         }),
-        hasConnection: Boolean(hydratedSettings.baseUrl && (hydratedSettings.adminToken || hydratedSettings.connectionToken)),
-        hasAdminToken: Boolean(hydratedSettings.adminToken),
+        hasConnection: Boolean(hydratedSettings.baseUrl && hydratedSettings.connectionToken),
+        hasConnectionToken: Boolean(hydratedSettings.connectionToken),
         hasCachedConnectionToken: Boolean(hydratedSettings.connectionToken),
         browserInfo: await getBrowserInfoSafe(),
         suggestedBaseUrl
@@ -361,15 +332,15 @@ async function updateStorePolicy({
     });
 }
 
-async function connectBaseUrl(rawBaseUrl, rawAdminToken = '', cookieStoreId = null) {
+async function connectBaseUrl(rawBaseUrl, rawConnectionToken = '', cookieStoreId = null) {
     const normalized = normalizeBaseUrl(rawBaseUrl);
     const existingGlobalConfig = await loadGlobalConfig();
-    const adminToken = typeof rawAdminToken === 'string' && rawAdminToken.trim()
-        ? rawAdminToken.trim()
-        : (existingGlobalConfig.baseUrl === normalized.origin ? existingGlobalConfig.adminToken : '');
+    const connectionToken = typeof rawConnectionToken === 'string' && rawConnectionToken.trim()
+        ? rawConnectionToken.trim()
+        : (existingGlobalConfig.baseUrl === normalized.origin ? existingGlobalConfig.connectionToken : '');
 
-    if (!adminToken) {
-        throw new Error('请填写 Flow2API 插件访问令牌');
+    if (!connectionToken) {
+        throw new Error('请填写 Flow2API 插件连接令牌');
     }
 
     const permissionGranted = await hasOriginPermission(normalized.origin);
@@ -377,22 +348,21 @@ async function connectBaseUrl(rawBaseUrl, rawAdminToken = '', cookieStoreId = nu
         throw new Error('需要先授权访问这个 Flow2API 域名');
     }
 
+    const now = new Date().toISOString();
     await saveGlobalConfig({
         baseUrl: normalized.origin,
-        adminToken,
-        connectionToken: ''
+        adminToken: '',
+        connectionToken,
+        validatedAt: now,
+        connectionTokenRefreshedAt: now
     });
     await saveStorePolicy(cookieStoreId, STORE_POLICY_AUTO);
-    await ensureConnectionTokenCache(normalized.origin, adminToken, {
-        forceRefresh: true
-    });
 
     const syncResult = await syncCurrentSession({
         reason: 'manual_connect',
         allowLabsWakeup: true,
         allowConsoleWakeup: false,
         notifyOnError: false,
-        adminToken,
         baseUrl: normalized.origin,
         cookieStoreId
     });
@@ -402,7 +372,7 @@ async function connectBaseUrl(rawBaseUrl, rawAdminToken = '', cookieStoreId = nu
             ...syncResult,
             success: true,
             hasConnection: true,
-            hasAdminToken: true,
+            hasConnectionToken: true,
             synced: true
         };
     }
@@ -410,12 +380,82 @@ async function connectBaseUrl(rawBaseUrl, rawAdminToken = '', cookieStoreId = nu
     return {
         success: true,
         hasConnection: true,
-        hasAdminToken: true,
+        hasConnectionToken: true,
         synced: false,
         lastSync: syncResult.lastSync || (await loadSettings({ cookieStoreId })).lastSync,
         message: syncResult.lastSync?.status === 'waiting_session'
             ? WAITING_FOR_LABS_MESSAGE
             : `Flow2API 已接入，但当前这个 Profile 的首次同步失败：${syncResult.error || '未知错误'}`
+    };
+}
+
+async function bootstrapConnectionToken({
+    baseUrl,
+    username = '',
+    password = '',
+    cookieStoreId = null
+} = {}) {
+    const normalized = normalizeBaseUrl(baseUrl);
+    const normalizedUsername = typeof username === 'string' && username.trim()
+        ? username.trim()
+        : 'admin';
+    const normalizedPassword = typeof password === 'string'
+        ? password.trim()
+        : '';
+
+    if (!normalizedPassword) {
+        throw new Error('请填写 Flow2API 后台密码');
+    }
+
+    const permissionGranted = await hasOriginPermission(normalized.origin);
+    if (!permissionGranted) {
+        throw new Error('需要先授权访问这个 Flow2API 域名');
+    }
+
+    const { connectionToken } = await fetchConnectionTokenFromAdminLogin(normalized.origin, {
+        username: normalizedUsername,
+        password: normalizedPassword
+    });
+    const now = new Date().toISOString();
+
+    await saveGlobalConfig({
+        baseUrl: normalized.origin,
+        adminToken: '',
+        connectionToken,
+        validatedAt: now,
+        connectionTokenRefreshedAt: now
+    });
+    await saveStorePolicy(cookieStoreId, STORE_POLICY_AUTO);
+
+    const syncResult = await syncCurrentSession({
+        reason: 'manual_connect',
+        allowLabsWakeup: true,
+        allowConsoleWakeup: false,
+        notifyOnError: false,
+        baseUrl: normalized.origin,
+        cookieStoreId
+    });
+
+    if (syncResult.success) {
+        return {
+            ...syncResult,
+            success: true,
+            hasConnection: true,
+            hasConnectionToken: true,
+            synced: true,
+            message: '已通过 Flow2API 后台账号换取并保存插件连接令牌。'
+        };
+    }
+
+    return {
+        success: true,
+        hasConnection: true,
+        hasConnectionToken: true,
+        synced: false,
+        lastSync: syncResult.lastSync || (await loadSettings({ cookieStoreId })).lastSync,
+        message: syncResult.lastSync?.status === 'waiting_session'
+            ? '插件连接令牌已保存，当前这个 Profile 还在等待 Google Labs 会话。'
+            : `插件连接令牌已保存，但当前这个 Profile 的首次同步失败：${syncResult.error || '未知错误'}`
     };
 }
 
@@ -502,6 +542,7 @@ async function syncCurrentSession({
     notifyOnError,
     adminToken = null,
     baseUrl = null,
+    connectionToken = null,
     cookieStoreId = null,
     refreshAlarm = true
 }) {
@@ -521,6 +562,7 @@ async function syncCurrentSession({
         notifyOnError,
         adminToken,
         baseUrl,
+        connectionToken,
         cookieStoreId: resolvedCookieStoreId,
         refreshAlarm
     }).finally(() => {
@@ -552,6 +594,7 @@ async function performSync({
     notifyOnError,
     adminToken,
     baseUrl,
+    connectionToken,
     cookieStoreId,
     refreshAlarm
 }) {
@@ -559,7 +602,6 @@ async function performSync({
 
     const settings = await loadSettings({ cookieStoreId });
     const effectiveBaseUrl = baseUrl || settings.baseUrl;
-    const effectiveAdminToken = adminToken || settings.adminToken || null;
     const preferredSessionContext = settings.sessionContext || buildStoreSessionPreference(cookieStoreId);
     const effectiveStorePolicy = settings.storePolicy || STORE_POLICY_OBSERVE;
     const effectiveAllowLabsWakeup = allowLabsWakeup && shouldAllowLabsWakeup({
@@ -581,31 +623,18 @@ async function performSync({
         };
     }
 
-    let connectionToken = settings.connectionToken;
-    if (!connectionToken && effectiveAdminToken) {
-        try {
-            const refreshedConnection = await ensureConnectionTokenCache(effectiveBaseUrl, effectiveAdminToken, {
-                forceRefresh: false
-            });
-            connectionToken = refreshedConnection.connectionToken;
-        } catch (error) {
-            await Logger.info('Flow2API connection cache unavailable before sync', {
-                baseUrl: effectiveBaseUrl,
-                reason: error.message
-            });
-        }
-    }
+    const effectiveConnectionToken = typeof connectionToken === 'string' && connectionToken.trim()
+        ? connectionToken.trim()
+        : settings.connectionToken;
 
-    if (!connectionToken) {
+    if (!effectiveConnectionToken) {
         return {
             success: false,
-            error: effectiveAdminToken
-                ? getInvalidPluginAccessTokenMessage(effectiveAdminToken)
-                : '请先填写 Flow2API 插件访问令牌'
+            error: '请先填写 Flow2API 插件连接令牌'
         };
     }
 
-    settings.connectionToken = connectionToken;
+    settings.connectionToken = effectiveConnectionToken;
 
     try {
         await Logger.info('Starting session sync', {
@@ -618,7 +647,6 @@ async function performSync({
 
         const sessionResolution = await resolveSessionCookie({
             baseUrl: effectiveBaseUrl,
-            adminToken: effectiveAdminToken,
             loadIfMissing: effectiveAllowLabsWakeup,
             preferredContext: preferredSessionContext,
             requestedStoreId: cookieStoreId
@@ -634,30 +662,15 @@ async function performSync({
             throw new Error('未找到当前 Profile 的 Google Labs 登录态，请先在这个 Profile 里登录 Labs');
         }
 
-        if (!derivedAccount && !effectiveAdminToken && shouldPreserveExistingToken(settings.lastSync, reason)) {
-            throw new Error(PRESERVE_EXISTING_TOKEN_MESSAGE);
-        }
-
         const pushResult = await pushSessionTokenWithRecovery({
             baseUrl: effectiveBaseUrl,
-            adminToken: effectiveAdminToken,
-            connectionToken,
+            connectionToken: effectiveConnectionToken,
             sessionToken: sessionCookie.value
         });
 
         if (pushResult.connectionToken) {
             connectionToken = pushResult.connectionToken;
             settings.connectionToken = pushResult.connectionToken;
-        }
-
-        if (!derivedAccount && effectiveAdminToken) {
-            try {
-                derivedAccount = await convertSessionToken(effectiveBaseUrl, effectiveAdminToken, sessionCookie.value);
-            } catch (error) {
-                await Logger.info('ST metadata lookup skipped', {
-                    reason: error.message
-                });
-            }
         }
 
         const syncPayload = pushResult.payload;
@@ -913,7 +926,7 @@ async function ensurePluginConfig(baseUrl, adminToken) {
     });
 
     if (configResponse.response.status === 401) {
-        throw new Error(getInvalidPluginAccessTokenMessage(adminToken));
+        throw new Error('Flow2API 后台登录态已失效，请重新输入后台账号密码');
     }
 
     if (!configResponse.response.ok) {
@@ -947,13 +960,79 @@ async function ensurePluginConfig(baseUrl, adminToken) {
     };
 }
 
+async function loginFlow2ApiAdmin(baseUrl, {
+    username,
+    password
+}) {
+    const response = await requestJson(`${baseUrl}/api/login`, {
+        method: 'POST',
+        body: {
+            username,
+            password
+        }
+    });
+
+    if (response.response.status === 401) {
+        throw new Error('Flow2API 后台账号或密码错误');
+    }
+
+    if (!response.response.ok) {
+        throw createHttpError(response, '登录 Flow2API 后台失败');
+    }
+
+    const adminToken = typeof response.data?.token === 'string'
+        ? response.data.token.trim()
+        : '';
+    if (!adminToken) {
+        throw new Error('Flow2API 没有返回可用的后台登录态');
+    }
+
+    return {
+        adminToken
+    };
+}
+
+async function logoutFlow2ApiAdmin(baseUrl, adminToken) {
+    if (!baseUrl || !adminToken) {
+        return;
+    }
+
+    try {
+        await requestJson(`${baseUrl}/api/logout`, {
+            method: 'POST',
+            authToken: adminToken
+        });
+    } catch (error) {
+        await Logger.info('Flow2API admin logout skipped', {
+            baseUrl,
+            reason: error.message
+        });
+    }
+}
+
+async function fetchConnectionTokenFromAdminLogin(baseUrl, {
+    username,
+    password
+}) {
+    const loginResult = await loginFlow2ApiAdmin(baseUrl, {
+        username,
+        password
+    });
+
+    try {
+        return await ensurePluginConfig(baseUrl, loginResult.adminToken);
+    } finally {
+        await logoutFlow2ApiAdmin(baseUrl, loginResult.adminToken);
+    }
+}
+
 async function ensureConnectionTokenCache(baseUrl, adminToken, {
     forceRefresh = false
 } = {}) {
     const normalizedBaseUrl = normalizeBaseUrl(baseUrl).origin;
     const normalizedAdminToken = typeof adminToken === 'string' ? adminToken.trim() : '';
     if (!normalizedAdminToken) {
-        throw new Error('请先填写 Flow2API 插件访问令牌');
+        throw new Error('请先提供 Flow2API 后台登录态，或直接填写 connection_token');
     }
 
     const existingGlobalConfig = await loadGlobalConfig();
@@ -1645,7 +1724,7 @@ async function handleLabsSessionRemoved(changeInfo, cookieStoreId = null) {
         return;
     }
 
-    if (!settings.baseUrl || (!settings.adminToken && !settings.connectionToken)) {
+    if (!settings.baseUrl || !settings.connectionToken) {
         return;
     }
 
@@ -2605,23 +2684,7 @@ async function detectCurrentSessionState({
         };
     }
 
-    let derivedAccount = null;
-    if (allowSessionMetadataLookup
-        && effectiveSettings.baseUrl
-        && effectiveSettings.adminToken
-        && await hasOriginPermission(effectiveSettings.baseUrl)) {
-        try {
-            derivedAccount = await convertSessionToken(
-                effectiveSettings.baseUrl,
-                effectiveSettings.adminToken,
-                sessionCookie.value
-            );
-        } catch (error) {
-            await Logger.info('Current session preview skipped', {
-                reason: error.message
-            });
-        }
-    }
+    const derivedAccount = null;
 
     return {
         sessionFingerprint,
@@ -3060,7 +3123,7 @@ async function collectConfiguredCookieStoreIds() {
     const scopedState = await loadStoreScopedState();
     const storeKeys = new Set();
 
-    if (globalConfig.baseUrl) {
+    if (globalConfig.baseUrl && globalConfig.connectionToken) {
         for (const storeKey of [
             ...Object.keys(scopedState.lastSyncByStore),
             ...Object.keys(scopedState.sessionContextByStore),
@@ -3274,7 +3337,6 @@ function createHttpError(result, fallbackMessage) {
 
 async function pushSessionTokenWithRecovery({
     baseUrl,
-    adminToken = null,
     connectionToken,
     sessionToken
 }) {
@@ -3284,30 +3346,16 @@ async function pushSessionTokenWithRecovery({
             connectionToken
         };
     } catch (error) {
-        if (!adminToken) {
-            throw error;
-        }
-
         if (!shouldRetryConnectionHydration(error)) {
             throw error;
         }
 
-        await Logger.info('Flow2API connection token rejected, retrying plugin credential refresh', {
+        await Logger.info('Flow2API connection token rejected', {
             baseUrl,
             status: error.httpStatus || null
         });
 
-        const recovered = await ensureConnectionTokenCache(baseUrl, adminToken, {
-            forceRefresh: true
-        });
-        if (!recovered.connectionToken) {
-            throw error;
-        }
-
-        return {
-            payload: await pushSessionToken(baseUrl, recovered.connectionToken, sessionToken),
-            connectionToken: recovered.connectionToken
-        };
+        throw new Error('Flow2API 插件连接令牌无效、已过期或已被后台改动，请在扩展里更新 connection_token');
     }
 }
 
@@ -3709,10 +3757,10 @@ function isLegacyFlow2ApiAdminSessionToken(rawValue) {
 
 function getInvalidPluginAccessTokenMessage(rawValue) {
     if (isLegacyFlow2ApiAdminSessionToken(rawValue)) {
-        return 'Flow2API Admin 登录态已过期，请重新登录，或改填系统 API Key 作为长期插件访问令牌';
+        return 'Flow2API 后台登录态已过期，请重新输入后台账号密码，或直接填写 connection_token';
     }
 
-    return 'Flow2API 插件访问令牌无效，请检查系统 API Key 或长期插件令牌';
+    return 'Flow2API 后台登录态无效，请重新输入后台账号密码，或直接填写 connection_token';
 }
 
 function normalizeBaseUrl(rawValue) {

@@ -12,14 +12,12 @@ const {
 
 function buildGlobalConfig({
     baseUrl = FLOW2API_ORIGIN,
-    adminToken = 'plugin-api-key',
     connectionToken = 'connection-token',
     storePolicyByStore = {}
 } = {}) {
     return {
         globalFlow2ApiConfig: {
             baseUrl,
-            adminToken,
             connectionToken
         },
         storePolicyByStore
@@ -30,17 +28,16 @@ async function testGlobalConfigConnectsWithoutOpeningConsole() {
     const harness = createHarness();
     const background = loadBackground(harness);
 
-    const result = await background.connectBaseUrl(FLOW2API_ORIGIN, 'plugin-api-key');
+    const result = await background.connectBaseUrl(FLOW2API_ORIGIN, 'connection-token');
 
     assert.equal(result.success, true);
     assert.equal(result.hasConnection, true);
-    assert.equal(result.hasAdminToken, true);
+    assert.equal(result.hasConnectionToken, true);
     assert.equal(result.synced, false);
     assert.equal(result.lastSync.status, 'waiting_session');
 
     const stored = harness.localStorageArea.dump();
     assert.equal(stored.globalFlow2ApiConfig.baseUrl, FLOW2API_ORIGIN);
-    assert.equal(stored.globalFlow2ApiConfig.adminToken, 'plugin-api-key');
     assert.equal(stored.globalFlow2ApiConfig.connectionToken, 'connection-token');
     assert.equal(stored.lastSyncByStore.__default__.status, 'waiting_session');
     assert.equal(
@@ -73,13 +70,13 @@ async function testSyncUsesGlobalConfigAcrossStores() {
             }
         ],
         fetchHandler({ requestUrl, method, authHeader, body, createMockResponse }) {
-            if (requestUrl.pathname === '/api/tokens/st2at' && method === 'POST' && authHeader === 'Bearer plugin-api-key') {
+            if (requestUrl.pathname === '/api/plugin/update-token' && method === 'POST' && authHeader === 'Bearer connection-token') {
                 return createMockResponse(200, {
                     success: true,
-                    email: `${body.st}@example.com`,
-                    expires: body.st === 'store-1-session'
-                        ? '2026-04-30T00:00:00.000Z'
-                        : '2026-05-01T00:00:00.000Z'
+                    action: 'updated',
+                    message: body.session_token === 'store-1-session'
+                        ? 'Token updated for store-1@example.com'
+                        : 'Token updated for store-3@example.com'
                 });
             }
 
@@ -103,8 +100,8 @@ async function testSyncUsesGlobalConfigAcrossStores() {
     assert.equal(store3.success, true);
 
     const stored = harness.localStorageArea.dump();
-    assert.equal(stored.lastSyncByStore['firefox-container-1'].email, 'store-1-session@example.com');
-    assert.equal(stored.lastSyncByStore['firefox-container-3'].email, 'store-3-session@example.com');
+    assert.equal(stored.lastSyncByStore['firefox-container-1'].email, 'store-1@example.com');
+    assert.equal(stored.lastSyncByStore['firefox-container-3'].email, 'store-3@example.com');
 
     const updateCalls = harness.apiCalls.filter((call) => call.url.endsWith('/api/plugin/update-token'));
     assert.deepEqual(
@@ -116,7 +113,7 @@ async function testSyncUsesGlobalConfigAcrossStores() {
     );
 }
 
-async function testPreviewUsesPluginAccessTokenWithoutConsoleProbe() {
+async function testPreviewUsesConnectionTokenWithoutConsoleProbe() {
     const harness = createHarness({
         cookies: [{
             name: SESSION_COOKIE_NAME,
@@ -137,78 +134,60 @@ async function testPreviewUsesPluginAccessTokenWithoutConsoleProbe() {
     });
 
     assert.equal(setup.success, true);
-    assert.equal(setup.hasAdminToken, true);
+    assert.equal(setup.hasConnectionToken, true);
     assert.equal(setup.settings.lastSync.status, 'detected_session');
-    assert.equal(setup.settings.lastSync.email, 'user@example.com');
+    assert.equal(setup.settings.lastSync.email, null);
     assert.equal(
         harness.createdTabs.filter((tab) => tab.url === FLOW2API_MANAGE_URL).length,
         0,
         'metadata preview should not create Flow2API manage tabs'
     );
+    assert.equal(
+        harness.apiCalls.some((call) => call.url.endsWith('/api/tokens/st2at')),
+        false,
+        'preview should no longer depend on privileged st2at lookups'
+    );
 }
 
-async function testConnectionTokenRecoveryUsesPluginAccessTokenInsteadOfConsole() {
+async function testBootstrapConnectionTokenUsesTemporaryAdminLogin() {
     const harness = createHarness({
         cookies: [{
             name: SESSION_COOKIE_NAME,
-            value: 'recover-session',
+            value: 'bootstrap-session',
             domain: 'labs.google',
             path: '/',
             storeId: 'default',
             firstPartyDomain: null,
             expirationDate: 1796054400
-        }],
-        fetchHandler({ requestUrl, method, authHeader, body, createMockResponse }) {
-            if (requestUrl.pathname === '/api/plugin/update-token' && method === 'POST') {
-                if (authHeader === 'Bearer stale-connection-token') {
-                    return createMockResponse(403, {
-                        message: 'connection token expired'
-                    });
-                }
-
-                if (authHeader === 'Bearer refreshed-connection-token') {
-                    return createMockResponse(200, {
-                        success: true,
-                        action: 'updated',
-                        message: `Token updated for ${body.session_token}`
-                    });
-                }
-            }
-
-            if (requestUrl.pathname === '/api/plugin/config' && method === 'GET' && authHeader === 'Bearer plugin-api-key') {
-                return createMockResponse(200, {
-                    config: {
-                        connection_token: 'refreshed-connection-token'
-                    }
-                });
-            }
-
-            return null;
-        }
+        }]
     });
     const background = loadBackground(harness);
 
-    await harness.localStorageArea.set(buildGlobalConfig({
-        connectionToken: 'stale-connection-token',
-        storePolicyByStore: {
-            __default__: 'auto'
-        }
-    }));
-
-    const result = await background.syncCurrentSession({
-        reason: 'scheduled_check',
-        allowLabsWakeup: false,
-        allowConsoleWakeup: false,
-        notifyOnError: false
+    const result = await background.bootstrapConnectionToken({
+        baseUrl: FLOW2API_ORIGIN,
+        username: 'admin',
+        password: 'secret',
+        cookieStoreId: 'default'
     });
 
     assert.equal(result.success, true);
     assert.equal(result.lastSync.status, 'success');
-    assert.equal(harness.localStorageArea.dump().globalFlow2ApiConfig.connectionToken, 'refreshed-connection-token');
+    assert.equal(harness.localStorageArea.dump().globalFlow2ApiConfig.connectionToken, 'connection-token');
+    assert.equal(harness.localStorageArea.dump().globalFlow2ApiConfig.adminToken, '');
+    assert.equal(
+        harness.apiCalls.some((call) => call.url.endsWith('/api/login')),
+        true,
+        'bootstrap should use the backend login endpoint exactly once'
+    );
+    assert.equal(
+        harness.apiCalls.some((call) => call.url.endsWith('/api/logout')),
+        true,
+        'bootstrap should clean up the temporary admin session'
+    );
     assert.equal(
         harness.createdTabs.filter((tab) => tab.url === FLOW2API_MANAGE_URL).length,
         0,
-        'connection token recovery should stay on the API path'
+        'bootstrap should stay on the API path'
     );
 }
 
@@ -274,7 +253,6 @@ async function testMetadataUnknownSchedulesHourlyProbe() {
     const background = loadBackground(harness);
 
     await harness.localStorageArea.set(buildGlobalConfig({
-        adminToken: '',
         connectionToken: 'connection-token',
         storePolicyByStore: {
             __default__: 'auto'
@@ -416,8 +394,8 @@ async function main() {
     const tests = [
         testGlobalConfigConnectsWithoutOpeningConsole,
         testSyncUsesGlobalConfigAcrossStores,
-        testPreviewUsesPluginAccessTokenWithoutConsoleProbe,
-        testConnectionTokenRecoveryUsesPluginAccessTokenInsteadOfConsole,
+        testPreviewUsesConnectionTokenWithoutConsoleProbe,
+        testBootstrapConnectionTokenUsesTemporaryAdminLogin,
         testGenericSyncErrorSchedulesQuickRetry,
         testMetadataUnknownSchedulesHourlyProbe,
         testObserveStoreDoesNotJoinAutomaticScheduling,

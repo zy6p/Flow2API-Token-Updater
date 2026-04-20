@@ -48,15 +48,15 @@ function loadPopupHelpers() {
     return context;
 }
 
-test('shouldPersistGlobalConfigBeforeSync persists a freshly entered token even when a saved token already exists', () => {
+test('shouldPersistGlobalConfigBeforeSync persists a freshly entered connection token even when a saved token already exists', () => {
     const popup = loadPopupHelpers();
 
     assert.equal(
         popup.shouldPersistGlobalConfigBeforeSync({
             currentBaseUrl: 'https://banana.hotdry.top',
             requestedBaseUrl: 'https://banana.hotdry.top',
-            hasSavedAdminToken: true,
-            adminTokenOverride: 'ec826c43e4812e3a524537d7357b411e60cd0232b8f7cd0d'
+            hasSavedConnectionToken: true,
+            connectionTokenOverride: '5MK8vfKldWqLSSwMvqhVK3LNbv8iLnKm'
         }),
         true
     );
@@ -65,8 +65,8 @@ test('shouldPersistGlobalConfigBeforeSync persists a freshly entered token even 
         popup.shouldPersistGlobalConfigBeforeSync({
             currentBaseUrl: 'https://banana.hotdry.top',
             requestedBaseUrl: 'https://banana.hotdry.top',
-            hasSavedAdminToken: true,
-            adminTokenOverride: ''
+            hasSavedConnectionToken: true,
+            connectionTokenOverride: ''
         }),
         false
     );

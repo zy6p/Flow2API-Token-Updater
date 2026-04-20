@@ -300,28 +300,26 @@ function createHarness({
             }
         }
 
+        if (requestUrl.pathname === '/api/login' && method === 'POST') {
+            return createMockResponse(200, {
+                success: true,
+                token: 'admin-session-token'
+            });
+        }
+
+        if (requestUrl.pathname === '/api/logout' && method === 'POST') {
+            assert.equal(authHeader, 'Bearer admin-session-token', 'logout should use the temporary admin session');
+            return createMockResponse(200, {
+                success: true
+            });
+        }
+
         if (requestUrl.pathname === '/api/plugin/config' && method === 'GET') {
-            assert.equal(authHeader, 'Bearer plugin-api-key', 'config GET should use plugin access token');
+            assert.equal(authHeader, 'Bearer admin-session-token', 'config GET should use the temporary admin session');
             return createMockResponse(200, {
                 config: {
                     connection_token: 'connection-token'
                 }
-            });
-        }
-
-        if (requestUrl.pathname === '/api/plugin/config' && method === 'POST') {
-            assert.equal(authHeader, 'Bearer plugin-api-key', 'config POST should use plugin access token');
-            return createMockResponse(200, {
-                connection_token: 'connection-token'
-            });
-        }
-
-        if (requestUrl.pathname === '/api/tokens/st2at' && method === 'POST') {
-            assert.equal(authHeader, 'Bearer plugin-api-key', 'st2at should use plugin access token');
-            return createMockResponse(200, {
-                success: true,
-                email: 'user@example.com',
-                expires: '2026-04-30T00:00:00.000Z'
             });
         }
 
@@ -330,7 +328,7 @@ function createHarness({
             return createMockResponse(200, {
                 success: true,
                 action: 'updated',
-                message: `Token updated for ${body.session_token}`
+                message: 'Token updated for user@example.com'
             });
         }
 
