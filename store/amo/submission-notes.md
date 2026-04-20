@@ -12,18 +12,17 @@ This extension is designed for users who run their own Flow2API service.
 
 - It reads cookies from `https://labs.google/` only.
 - It looks for the `__Secure-next-auth.session-token` cookie only.
-- After the user enters a Flow2API address and grants site access, the extension may read the local admin session state from the user's already logged-in Flow2API console in the same browser in order to auto-discover the plugin connection token.
+- During setup, the user enters a Flow2API address plus username and password once.
+- That login is sent only to the user's own Flow2API server to obtain an internal plugin connection credential for later syncs; the password is not kept as the long-term runtime credential.
 - The AMO listed package does not request install-time access to all websites. Its install-time host permission is limited to `https://labs.google/*`; access to the user-entered Flow2API origin is requested at runtime through optional host permissions only when the user connects a site.
-- If the browser still has a reusable login but the related page is not open, the extension may silently open `https://labs.google/` or the user's Flow2API `/manage` page in a background tab to rediscover that session, then close the temporary tab.
-- When probing for a reusable Flow2API console login, the extension only checks tabs on the user-entered origin whose path starts with `/manage` or `/login`, or it opens `/manage` itself.
+- If the browser still has a reusable Google login but the related page is not open, the extension may silently open `https://labs.google/` in a background tab to rediscover that session, then close the temporary tab.
 - Before overwriting the user's current Flow2API token, the extension attempts to validate the candidate Labs session through the user's own Flow2API endpoint and ignores stale Labs cookies whose browser `expirationDate` may be misleadingly long.
 - If the extension cannot validate a newly discovered Labs cookie yet but the currently synced token is still known to be valid, it keeps the current token and schedules a retry instead of overwriting it blindly.
 - The extracted token is sent only to the user's own Flow2API endpoint at `/api/plugin/update-token`.
 - The extension remembers the last successful Labs cookie context for the current profile and prefers that same cookie store / container during later background recovery, to avoid mixing sessions inside one Firefox-based profile.
-- If the previously discovered plugin connection token is rejected but the browser still has a reusable Flow2API console login, the extension may silently reopen the user's own `/manage` page in a background tab, rediscover the plugin connection token, and retry exactly once.
 - The extension does not send analytics, ads, telemetry, or tracking data to the developer.
 - Local per-profile sync state is stored in `storage.local`.
-- Flow2API address and discovered plugin connection token are now also kept per-profile in `storage.local`; the add-on no longer shares them through `storage.sync`.
+- Flow2API address and the discovered internal plugin connection credential are kept per-profile in `storage.local`; the add-on does not rely on `storage.sync`.
 
 ## Build and sign
 
